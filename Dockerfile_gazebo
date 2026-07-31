@@ -1,0 +1,6 @@
+FROM osrf/ros:jazzy-desktop-full
+
+# Download Gazebo Sim (Harmonic) and the bridge for ROS2 Jazzy
+RUN apt-get update && apt-get install -y \
+    ros-jazzy-ros-gz \
+    && rm -rf /var/lib/apt/lists/*
