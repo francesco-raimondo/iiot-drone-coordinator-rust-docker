@@ -1,1 +1,30 @@
 services:
+  gazebo-sim:
+    image: my-ros2-jazzy-desktop-full:latest
+    container_name: gazebo-sim
+    networks:
+      - ros-net
+    ipc: host
+    environment:
+      - ROS_DOMAIN_ID=0
+    command: gz sim -s -v 4 -r empty.sdf
+    tty: true
+    stdin_open: true
+
+  drone:
+    build:
+      context: .
+      dockerfile: Dockerfile_drone
+    networks:
+      - ros-net
+    ipc: host
+    volumes:
+      - ./shared:/shared
+    environment:
+      - ROS_DOMAIN_ID=0
+    tty: true
+    stdin_open: true
+
+networks:
+  ros-net:
+    driver: bridge
