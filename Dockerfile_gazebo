@@ -1,9 +1,9 @@
 FROM osrf/ros:jazzy-desktop-full
 
-# Installiamo Gazebo Sim (Harmonic) e il bridge per ROS2 Jazzy
+# Install Gazebo Sim (Harmonic) and ROS2 Jazzy bridge
 RUN apt-get update && apt-get install -y \
     ros-jazzy-ros-gz \
     && rm -rf /var/lib/apt/lists/*
 
-# In Jazzy, il comando ufficiale è 'gz sim'
+# In Jazzy, the official command is 'gz sim'
 CMD ["gz", "sim", "-v", "4", "-r", "empty.sdf"]
