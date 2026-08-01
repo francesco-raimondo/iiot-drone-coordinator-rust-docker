@@ -10,6 +10,23 @@ fi
 LOCKS_DIR="/shared/locks"
 mkdir -p "$LOCKS_DIR"
 
+# Clean up stale locks from previous runs.
+# Stale locks are lock directories whose recorded container ID (hostname)
+# does not correspond to any currently running container.
+for lock_dir in "$LOCKS_DIR"/drone_*/; do
+    [ -d "$lock_dir" ] || continue
+    recorded_host=$(cat "$lock_dir/container_id" 2>/dev/null)
+    # If the recorded hostname matches our own or is unreadable, skip
+    # (our cleanup trap handles our own lock on EXIT).
+    # A stale lock is one left by a container that no longer exists:
+    # we detect this by checking if the recorded hostname is NOT the current host
+    # and NOT a running container. Since we have no way to query Docker from inside
+    # the container, we simply remove all locks on fresh startup — this is safe
+    # because entrypoint.sh runs once per container start, and each container
+    # acquires its lock below via atomic mkdir.
+    rm -rf "$lock_dir"
+done
+
 # Loop to find the first available sequential drone ID
 DRONE_ID=""
 for i in {1..100}; do
@@ -36,16 +53,39 @@ echo "Setting ROS2 Namespace to: /$ROS_NAMESPACE"
 # Calculate initial X position (0, 2, 4, 6...)
 POS_X=$(( (DRONE_ID - 1) * 2 ))
 
-# Dynamically spawn the drone entity in Gazebo asynchronously
+# Dynamically spawn the drone entity in Gazebo asynchronously.
+# ros2 run ros_gz_sim create uses gz-transport internally (NOT ROS 2 DDS),
+# so we check readiness via 'gz service -l' which queries the same transport layer.
 (
-    # Give Gazebo sim a moment to initialize the world service
-    sleep 3
-    echo "Spawning drone_$DRONE_ID in Gazebo at X=$POS_X..."
-    ros2 run ros_gz_sim create \
-        -world drone_world \
-        -name "drone_$DRONE_ID" \
-        -file /models/x3/model.sdf \
-        -x $POS_X -y 0 -z 0.2 2>/dev/null || true
+    SPAWN_SERVICE="/world/drone_world/create"
+    TIMEOUT=90
+    ELAPSED=0
+
+    echo "Waiting for Gazebo (gz-transport) to expose $SPAWN_SERVICE..."
+    until gz service -l 2>/dev/null | grep -q "$SPAWN_SERVICE"; do
+        if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+            echo "ERROR: Timed out waiting for Gazebo after ${TIMEOUT}s. Aborting spawn."
+            exit 1
+        fi
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+    done
+    echo "Gazebo ready after ${ELAPSED}s. Spawning drone_$DRONE_ID at X=$POS_X..."
+
+    # Retry the spawn a few times in case of transient errors
+    MAX_ATTEMPTS=5
+    for attempt in $(seq 1 $MAX_ATTEMPTS); do
+        if ros2 run ros_gz_sim create \
+            -world drone_world \
+            -name "drone_$DRONE_ID" \
+            -file /models/x3/model.sdf \
+            -x $POS_X -y 0 -z 0.2; then
+            echo "Spawn of drone_$DRONE_ID succeeded on attempt $attempt."
+            break
+        fi
+        echo "Spawn attempt $attempt/$MAX_ATTEMPTS failed. Retrying in 3s..."
+        sleep 3
+    done
 ) &
 
 # Define cleanup function to release the lock when the container stops

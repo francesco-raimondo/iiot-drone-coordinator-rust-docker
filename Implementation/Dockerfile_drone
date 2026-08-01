@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     git \
     python3-pip \
+    ros-jazzy-ros-gz \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust toolchain globally via rustup

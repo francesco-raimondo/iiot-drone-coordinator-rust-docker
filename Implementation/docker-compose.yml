@@ -3,11 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile_gazebo
-    #image: my-ros2-jazzy-desktop-full:latest
     container_name: gazebo-sim
-    networks:
-      - ros-net
-    ipc: host
+    network_mode: "host"
     environment:
       - ROS_DOMAIN_ID=0
       - DISPLAY=${DISPLAY}
@@ -28,7 +25,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: gz sim -v 4 -r /worlds/drone_world.sdf
+    command: ros2 launch ros_gz_sim gz_sim.launch.py gz_args:="-v 4 -r /worlds/drone_world.sdf"
     tty: true
     stdin_open: true
 
@@ -36,9 +33,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile_drone
-    networks:
-      - ros-net
-    ipc: host
+    network_mode: "host"
     volumes:
       - ./shared:/shared
       - ./models:/models
@@ -47,7 +42,3 @@ services:
       - GZ_SIM_RESOURCE_PATH=/models
     tty: true
     stdin_open: true
-
-networks:
-  ros-net:
-    driver: bridge

@@ -5,5 +5,5 @@ RUN apt-get update && apt-get install -y \
     ros-jazzy-ros-gz \
     && rm -rf /var/lib/apt/lists/*
 
-# In Jazzy, the official command is 'gz sim'
-CMD ["gz", "sim", "-v", "4", "-r", "empty.sdf"]
+# In Jazzy, we launch Gazebo via the ros_gz_sim wrapper to expose ROS 2 services (like spawn)
+CMD ["ros2", "launch", "ros_gz_sim", "gz_sim.launch.py", "gz_args:=-v 4 -r empty.sdf"]
