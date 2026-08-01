@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile_gazebo
-    image: my-ros2-jazzy-desktop-full:latest
+    #image: my-ros2-jazzy-desktop-full:latest
     container_name: gazebo-sim
     networks:
       - ros-net

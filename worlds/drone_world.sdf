@@ -59,5 +59,11 @@
       </link>
     </model>
 
+    <!-- Drone X3 (Static Spawn) -->
+    <include>
+      <uri>model://x3</uri>
+      <pose>0 0 0.5 0 0 0</pose>
+    </include>
+
   </world>
 </sdf>
