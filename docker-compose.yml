@@ -13,9 +13,12 @@ services:
       - DISPLAY=${DISPLAY}
       - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
       - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+      - GZ_SIM_RESOURCE_PATH=/models
     volumes:
       - ${X11_SOCKET_MOUNT:-/tmp/.X11-unix:/tmp/.X11-unix:rw}
       - ${WSLG_MOUNT:-/dev/null:/dev/null}
+      - ./worlds:/worlds
+      - ./models:/models
     devices:
       - ${DXG_DEVICE:-/dev/null}
     deploy:
@@ -25,7 +28,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: gz sim -v 4 -r empty.sdf
+    command: gz sim -v 4 -r /worlds/drone_world.sdf
     tty: true
     stdin_open: true
 
