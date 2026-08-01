@@ -33,6 +33,21 @@ echo "Container ID (hostname): $HOSTNAME"
 echo "Allocated Drone ID: $DRONE_ID"
 echo "Setting ROS2 Namespace to: /$ROS_NAMESPACE"
 
+# Calculate initial X position (0, 2, 4, 6...)
+POS_X=$(( (DRONE_ID - 1) * 2 ))
+
+# Dynamically spawn the drone entity in Gazebo asynchronously
+(
+    # Give Gazebo sim a moment to initialize the world service
+    sleep 3
+    echo "Spawning drone_$DRONE_ID in Gazebo at X=$POS_X..."
+    ros2 run ros_gz_sim create \
+        -world drone_world \
+        -name "drone_$DRONE_ID" \
+        -file /models/x3/model.sdf \
+        -x $POS_X -y 0 -z 0.2 2>/dev/null || true
+) &
+
 # Define cleanup function to release the lock when the container stops
 cleanup() {
     echo "Releasing lock for drone_$DRONE_ID..."

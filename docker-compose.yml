@@ -41,8 +41,10 @@ services:
     ipc: host
     volumes:
       - ./shared:/shared
+      - ./models:/models
     environment:
       - ROS_DOMAIN_ID=0
+      - GZ_SIM_RESOURCE_PATH=/models
     tty: true
     stdin_open: true
 

@@ -59,26 +59,5 @@
       </link>
     </model>
 
-    <!-- Drone 1 -->
-    <include>
-      <name>drone_1</name>
-      <pose>0 0 0.2 0 0 0</pose>
-      <uri>model://x3</uri>
-    </include>
-
-    <!-- Drone 2 -->
-    <include>
-      <name>drone_2</name>
-      <pose>2 0 0.2 0 0 0</pose>
-      <uri>model://x3</uri>
-    </include>
-
-    <!-- Drone 3 -->
-    <include>
-      <name>drone_3</name>
-      <pose>-2 0 0.2 0 0 0</pose>
-      <uri>model://x3</uri>
-    </include>
-
   </world>
 </sdf>
