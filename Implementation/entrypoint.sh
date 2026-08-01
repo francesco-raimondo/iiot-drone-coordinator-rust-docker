@@ -6,26 +6,12 @@ if [ -f "/opt/ros/jazzy/setup.bash" ]; then
     source /opt/ros/jazzy/setup.bash
 fi
 
-# Define the shared locks directory
+# Define the shared locks directory.
+# The /shared volume is a Docker named volume (see docker-compose.yml).
+# It is cleaned automatically when 'docker compose down -v' is run,
+# ensuring fresh IDs on every new session without risky manual cleanup.
 LOCKS_DIR="/shared/locks"
 mkdir -p "$LOCKS_DIR"
-
-# Clean up stale locks from previous runs.
-# Stale locks are lock directories whose recorded container ID (hostname)
-# does not correspond to any currently running container.
-for lock_dir in "$LOCKS_DIR"/drone_*/; do
-    [ -d "$lock_dir" ] || continue
-    recorded_host=$(cat "$lock_dir/container_id" 2>/dev/null)
-    # If the recorded hostname matches our own or is unreadable, skip
-    # (our cleanup trap handles our own lock on EXIT).
-    # A stale lock is one left by a container that no longer exists:
-    # we detect this by checking if the recorded hostname is NOT the current host
-    # and NOT a running container. Since we have no way to query Docker from inside
-    # the container, we simply remove all locks on fresh startup — this is safe
-    # because entrypoint.sh runs once per container start, and each container
-    # acquires its lock below via atomic mkdir.
-    rm -rf "$lock_dir"
-done
 
 # Loop to find the first available sequential drone ID
 DRONE_ID=""

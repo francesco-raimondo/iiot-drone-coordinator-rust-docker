@@ -35,10 +35,15 @@ services:
       dockerfile: Dockerfile_drone
     network_mode: "host"
     volumes:
-      - ./shared:/shared
+      - drone_locks:/shared
       - ./models:/models
     environment:
       - ROS_DOMAIN_ID=0
       - GZ_SIM_RESOURCE_PATH=/models
     tty: true
     stdin_open: true
+
+volumes:
+  # Named volume for drone ID locks. Cleaned automatically with 'docker compose down -v',
+  # ensuring fresh drone ID allocation on every new session.
+  drone_locks:
