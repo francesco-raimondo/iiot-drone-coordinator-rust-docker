@@ -44,19 +44,41 @@ POS_X=$(( (DRONE_ID - 1) * 2 ))
 # so we check readiness via 'gz service -l' which queries the same transport layer.
 (
     SPAWN_SERVICE="/world/drone_world/create"
+    STATS_TOPIC="/world/drone_world/stats"
     TIMEOUT=90
     ELAPSED=0
 
-    echo "Waiting for Gazebo (gz-transport) to expose $SPAWN_SERVICE..."
+    # Step 1: Wait for gz-transport to expose the spawn service.
+    # This happens early during Gazebo initialization.
+    echo "Waiting for Gazebo spawn service ($SPAWN_SERVICE)..."
     until gz service -l 2>/dev/null | grep -q "$SPAWN_SERVICE"; do
         if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-            echo "ERROR: Timed out waiting for Gazebo after ${TIMEOUT}s. Aborting spawn."
+            echo "ERROR: Timed out waiting for Gazebo service after ${TIMEOUT}s. Aborting spawn."
             exit 1
         fi
         sleep 1
         ELAPSED=$((ELAPSED + 1))
     done
-    echo "Gazebo ready after ${ELAPSED}s. Spawning drone_$DRONE_ID at X=$POS_X..."
+
+    # Step 2: Wait for the world stats topic, which is only published AFTER
+    # the SceneBroadcaster system is fully loaded and the world is truly running.
+    # This is the reliable "world fully ready" indicator.
+    echo "Service found at ${ELAPSED}s. Waiting for world stats topic ($STATS_TOPIC)..."
+    until gz topic -l 2>/dev/null | grep -q "$STATS_TOPIC"; do
+        if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+            echo "ERROR: Timed out waiting for world stats after ${TIMEOUT}s. Aborting spawn."
+            exit 1
+        fi
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+    done
+    echo "Gazebo fully ready at ${ELAPSED}s."
+
+    # Stagger spawns by drone ID to avoid flooding Gazebo with simultaneous requests.
+    STAGGER_DELAY=$((DRONE_ID * 1))
+    echo "Staggering by ${STAGGER_DELAY}s (drone ID $DRONE_ID)..."
+    sleep $STAGGER_DELAY
+    echo "Spawning drone_$DRONE_ID at X=$POS_X..."
 
     # Retry the spawn a few times in case of transient errors
     MAX_ATTEMPTS=5
