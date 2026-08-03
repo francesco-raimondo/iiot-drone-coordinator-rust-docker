@@ -42,7 +42,7 @@ networks:
     driver: bridge
 
 volumes:
-  # Named volume for drone ID locks. Cleaned automatically with 'docker compose down -v',
+  # Named volume for drone ID locks.. Cleaned automatically with 'docker compose down -v',
   # ensuring fresh drone ID allocation on every new session.
   drone_locks:
 
