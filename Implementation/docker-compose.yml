@@ -18,14 +18,7 @@ services:
       - ./worlds:/worlds
       - ./models:/models
     devices:
-      - ${DXG_DEVICE:-/dev/null}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - ${GPU_DEVICE:-/dev/dri}
     command: ros2 launch ros_gz_sim gz_sim.launch.py gz_args:="-v 4 -r /worlds/drone_world.sdf"
     tty: true
     stdin_open: true
@@ -52,4 +45,5 @@ volumes:
   # Named volume for drone ID locks. Cleaned automatically with 'docker compose down -v',
   # ensuring fresh drone ID allocation on every new session.
   drone_locks:
+
 
