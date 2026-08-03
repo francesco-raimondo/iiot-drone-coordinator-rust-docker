@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile_gazebo
     container_name: gazebo-sim
-    network_mode: "host"
+    networks:
+      - ros_net
     environment:
       - ROS_DOMAIN_ID=0
       - DISPLAY=${DISPLAY}
@@ -33,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile_drone
-    network_mode: "host"
+    network_mode: "service:gazebo-sim"
     volumes:
       - drone_locks:/shared
       - ./models:/models
@@ -43,7 +44,12 @@ services:
     tty: true
     stdin_open: true
 
+networks:
+  ros_net:
+    driver: bridge
+
 volumes:
   # Named volume for drone ID locks. Cleaned automatically with 'docker compose down -v',
   # ensuring fresh drone ID allocation on every new session.
   drone_locks:
+
