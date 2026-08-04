@@ -2,7 +2,7 @@ services:
   gazebo-sim:
     build:
       context: .
-      dockerfile: Dockerfile_gazebo
+      dockerfile: gazebo/Dockerfile_gazebo
     container_name: gazebo-sim
     networks:
       - ros_net
@@ -15,8 +15,8 @@ services:
     volumes:
       - ${X11_SOCKET_MOUNT:-/tmp/.X11-unix:/tmp/.X11-unix:rw}
       - ${WSLG_MOUNT:-/dev/null:/dev/null}
-      - ./worlds:/worlds
-      - ./models:/models
+      - ./gazebo/worlds:/worlds
+      - ./gazebo/models:/models
     devices:
       - ${GPU_DEVICE:-/dev/dri}
     command: ros2 launch ros_gz_sim gz_sim.launch.py gz_args:="-v 4 -r /worlds/drone_world.sdf"
@@ -25,12 +25,12 @@ services:
 
   drone:
     build:
-      context: .
+      context: ./drone
       dockerfile: Dockerfile_drone
     network_mode: "service:gazebo-sim"
     volumes:
       - drone_locks:/shared
-      - ./models:/models
+      - ./gazebo/models:/models
     environment:
       - ROS_DOMAIN_ID=0
       - GZ_SIM_RESOURCE_PATH=/models
@@ -45,5 +45,4 @@ volumes:
   # Named volume for drone ID locks.. Cleaned automatically with 'docker compose down -v',
   # ensuring fresh drone ID allocation on every new session.
   drone_locks:
-
 
