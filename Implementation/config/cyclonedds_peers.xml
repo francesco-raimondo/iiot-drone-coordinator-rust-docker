@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Configurazione ALTERNATIVA a Fast-DDS Discovery Server.
+  CycloneDDS non ha un "discovery server" vero e proprio, ma ottiene
+  lo stesso risultato pratico disabilitando il multicast e fornendo
+  una lista esplicita di peer unicast.
+
+  Per usarla al posto di Fast-DDS, in ogni container:
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI=file:///path/to/cyclonedds_peers.xml
+  e rimuovere ROS_DISCOVERY_SERVER (è specifico di Fast-DDS).
+  Aggiornare gli indirizzi Peer con gli IP statici reali dei container.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface autodetermine="true" />
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+        <Peer address="172.28.0.20" />  <!-- gazebo -->
+        <Peer address="172.28.0.21" />  <!-- drone1 -->
+        <Peer address="172.28.0.22" />  <!-- drone2 -->
+        <Peer address="172.28.0.23" />  <!-- drone3 -->
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

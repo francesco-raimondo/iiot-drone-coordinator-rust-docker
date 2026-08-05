@@ -1,0 +1,27 @@
+FROM ros:jazzy-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ros-jazzy-ros-gz installa Gazebo Harmonic come dipendenza (pairing
+# ufficiale con ROS2 Jazzy) + i pacchetti di bridging ros_gz.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-ros-gz \
+        ros-jazzy-ros-gz-sim \
+        ros-jazzy-ros-gz-bridge \
+        iproute2 \
+        iputils-ping \
+        netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /worlds /entrypoint
+
+COPY worlds/empty_discovery.sdf /worlds/empty_discovery.sdf
+COPY entrypoints/entrypoint_gazebo.sh /entrypoint/entrypoint_gazebo.sh
+RUN chmod +x /entrypoint/entrypoint_gazebo.sh
+
+ENV GZ_SIM_RESOURCE_PATH=/worlds
+ENV GZ_VERSION=harmonic
+
+WORKDIR /worlds
+
+ENTRYPOINT ["/entrypoint/entrypoint_gazebo.sh"]

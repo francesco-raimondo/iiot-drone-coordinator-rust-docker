@@ -1,48 +1,122 @@
+networks:
+  swarm_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
 services:
-  gazebo-sim:
+
+  # ---------------------------------------------------------------
+  # Fast-DDS Discovery Server (unicast) — sostituisce il discovery
+  # multicast di default per ROS 2.
+  # ---------------------------------------------------------------
+  discovery-server:
+    image: ros:jazzy-ros-base
+    container_name: discovery-server
+    hostname: discovery-server
+    command: >
+      bash -c "source /opt/ros/jazzy/setup.bash &&
+      fastdds discovery -i 0 -l 0.0.0.0 -p 11811"
+    networks:
+      swarm_net:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "11811:11811/udp"
+      - "11811:11811/tcp"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Container Gazebo: mondo empty + spawn point per i droni
+  # ---------------------------------------------------------------
+  gazebo:
     build:
       context: .
-      dockerfile: gazebo/Dockerfile_gazebo
-    container_name: gazebo-sim
+      dockerfile: Dockerfile.gazebo
+    container_name: gazebo
+    hostname: gazebo
+    depends_on:
+      - discovery-server
+    environment:
+      DISCOVERY_SERVER_IP: "172.28.0.10"
+      DISCOVERY_SERVER_PORT: "11811"
+      GZ_OWN_IP: "172.28.0.20"
     networks:
-      - ros_net
-    environment:
-      - ROS_DOMAIN_ID=0
-      - DISPLAY=${DISPLAY}
-      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
-      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
-      - GZ_SIM_RESOURCE_PATH=/models
-    volumes:
-      - ${X11_SOCKET_MOUNT:-/tmp/.X11-unix:/tmp/.X11-unix:rw}
-      - ${WSLG_MOUNT:-/dev/null:/dev/null}
-      - ./gazebo/worlds:/worlds
-      - ./gazebo/models:/models
-    devices:
-      - ${GPU_DEVICE:-/dev/dri}
-    command: ros2 launch ros_gz_sim gz_sim.launch.py gz_args:="-v 4 -r /worlds/drone_world.sdf"
-    tty: true
-    stdin_open: true
+      swarm_net:
+        ipv4_address: 172.28.0.20
+    restart: unless-stopped
 
-  drone:
+  # ---------------------------------------------------------------
+  # Drone 1
+  # ---------------------------------------------------------------
+  drone1:
     build:
-      context: ./drone
-      dockerfile: Dockerfile_drone
-    network_mode: "service:gazebo-sim"
-    volumes:
-      - drone_locks:/shared
-      - ./gazebo/models:/models
+      context: .
+      dockerfile: Dockerfile.drone
+    container_name: drone1
+    hostname: drone1
+    depends_on:
+      - gazebo
     environment:
-      - ROS_DOMAIN_ID=0
-      - GZ_SIM_RESOURCE_PATH=/models
-    tty: true
-    stdin_open: true
+      DISCOVERY_SERVER_IP: "172.28.0.10"
+      DISCOVERY_SERVER_PORT: "11811"
+      GZ_OWN_IP: "172.28.0.21"
+      DRONE_NAME: "drone1"
+      SPAWN_X: "0"
+      SPAWN_Y: "0"
+      SPAWN_Z: "0.3"
+      WORLD_NAME: "empty"
+    networks:
+      swarm_net:
+        ipv4_address: 172.28.0.21
+    restart: unless-stopped
 
-networks:
-  ros_net:
-    driver: bridge
+  # ---------------------------------------------------------------
+  # Drone 2
+  # ---------------------------------------------------------------
+  drone2:
+    build:
+      context: .
+      dockerfile: Dockerfile.drone
+    container_name: drone2
+    hostname: drone2
+    depends_on:
+      - gazebo
+    environment:
+      DISCOVERY_SERVER_IP: "172.28.0.10"
+      DISCOVERY_SERVER_PORT: "11811"
+      GZ_OWN_IP: "172.28.0.22"
+      DRONE_NAME: "drone2"
+      SPAWN_X: "1.5"
+      SPAWN_Y: "0"
+      SPAWN_Z: "0.3"
+      WORLD_NAME: "empty"
+    networks:
+      swarm_net:
+        ipv4_address: 172.28.0.22
+    restart: unless-stopped
 
-volumes:
-  # Named volume for drone ID locks.. Cleaned automatically with 'docker compose down -v',
-  # ensuring fresh drone ID allocation on every new session.
-  drone_locks:
-
+  # ---------------------------------------------------------------
+  # Drone 3
+  # ---------------------------------------------------------------
+  drone3:
+    build:
+      context: .
+      dockerfile: Dockerfile.drone
+    container_name: drone3
+    hostname: drone3
+    depends_on:
+      - gazebo
+    environment:
+      DISCOVERY_SERVER_IP: "172.28.0.10"
+      DISCOVERY_SERVER_PORT: "11811"
+      GZ_OWN_IP: "172.28.0.23"
+      DRONE_NAME: "drone3"
+      SPAWN_X: "3.0"
+      SPAWN_Y: "0"
+      SPAWN_Z: "0.3"
+      WORLD_NAME: "empty"
+    networks:
+      swarm_net:
+        ipv4_address: 172.28.0.23
+    restart: unless-stopped
