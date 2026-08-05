@@ -30,8 +30,8 @@ until getent hosts discovery-server > /dev/null 2>&1; do
 done
 sleep 2
 
-echo "[gazebo] avvio Gazebo Harmonic in modalità server-only (headless)..."
-gz sim -s -r -v 3 /worlds/empty_discovery.sdf &
+echo "[gazebo] avvio Gazebo Harmonic con interfaccia grafica..."
+gz sim -r -v 3 /worlds/empty_discovery.sdf &
 GZ_PID=$!
 
 # piccolo margine per lasciare inizializzare gz-transport prima del bridge
