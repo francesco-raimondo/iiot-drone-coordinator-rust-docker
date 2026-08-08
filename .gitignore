@@ -1,3 +1,0 @@
-# Docker shared volume dynamic lock files
-Implementation/shared/locks/*
-!Implementation/shared/locks/.gitkeep
