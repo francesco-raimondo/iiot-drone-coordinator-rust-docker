@@ -15,7 +15,7 @@ RUN mkdir -p /entrypoint /drone_ws
 
 COPY entrypoints/entrypoint_drone.sh /entrypoint/entrypoint_drone.sh
 RUN chmod +x /entrypoint/entrypoint_drone.sh
-COPY drone_agent/drone_node.py /drone_ws/drone_node.py
+COPY drone_agent/drone_agent_wrapper.py /drone_ws/drone_agent_wrapper.py
 
 WORKDIR /drone_ws
 

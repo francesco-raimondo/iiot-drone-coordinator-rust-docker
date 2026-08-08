@@ -51,6 +51,27 @@ services:
         ipv4_address: 172.28.0.20
     restart: unless-stopped
 
+  # ---------------------------------------------------------------
+  # Coordinator: Coordinatore dello swarm in Rust
+  # ---------------------------------------------------------------
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    container_name: coordinator
+    hostname: coordinator
+    depends_on:
+      - discovery-server
+      - gazebo
+    environment:
+      DISCOVERY_SERVER_IP: "172.28.0.10"
+      DISCOVERY_SERVER_PORT: "11811"
+      GZ_OWN_IP: "172.28.0.30"
+      WORLD_NAME: "empty"
+    networks:
+      swarm_net:
+        ipv4_address: 172.28.0.30
+    restart: unless-stopped
 
   # ---------------------------------------------------------------
   # Drone 1
@@ -62,7 +83,7 @@ services:
     container_name: drone1
     hostname: drone1
     depends_on:
-      - gazebo
+      - coordinator
     environment:
       DISCOVERY_SERVER_IP: "172.28.0.10"
       DISCOVERY_SERVER_PORT: "11811"
@@ -87,7 +108,7 @@ services:
     container_name: drone2
     hostname: drone2
     depends_on:
-      - gazebo
+      - coordinator
     environment:
       DISCOVERY_SERVER_IP: "172.28.0.10"
       DISCOVERY_SERVER_PORT: "11811"
@@ -112,7 +133,7 @@ services:
     container_name: drone3
     hostname: drone3
     depends_on:
-      - gazebo
+      - coordinator
     environment:
       DISCOVERY_SERVER_IP: "172.28.0.10"
       DISCOVERY_SERVER_PORT: "11811"

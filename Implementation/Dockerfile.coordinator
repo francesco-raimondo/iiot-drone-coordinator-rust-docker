@@ -1,0 +1,28 @@
+FROM ros:jazzy-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-ros-gz-sim \
+        ros-jazzy-ros-gz-bridge \
+        curl \
+        build-essential \
+        iproute2 \
+        iputils-ping \
+        netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN mkdir -p /coordinator /entrypoint
+
+COPY coordinator /coordinator
+COPY entrypoints/entrypoint_coordinator.sh /entrypoint/entrypoint_coordinator.sh
+RUN chmod +x /entrypoint/entrypoint_coordinator.sh
+
+WORKDIR /coordinator
+RUN cargo build --release
+
+ENTRYPOINT ["/entrypoint/entrypoint_coordinator.sh"]
