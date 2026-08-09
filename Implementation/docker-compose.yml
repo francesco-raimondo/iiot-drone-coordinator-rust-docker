@@ -8,8 +8,8 @@ networks:
 services:
 
   # ---------------------------------------------------------------
-  # Fast-DDS Discovery Server (unicast) — sostituisce il discovery
-  # multicast di default per ROS 2.
+  # Fast-DDS Discovery Server (unicast) — replaces default
+  # multicast discovery for ROS 2.
   # ---------------------------------------------------------------
   discovery-server:
     image: ros:jazzy-ros-base
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------
-  # Container Gazebo: mondo empty + spawn point per i droni
+  # Gazebo Container: empty world + spawn point for drones
   # ---------------------------------------------------------------
   gazebo:
     build:
@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------
-  # Coordinator: Coordinatore dello swarm in Rust
+  # Coordinator: Rust swarm coordinator
   # ---------------------------------------------------------------
   coordinator:
     build:

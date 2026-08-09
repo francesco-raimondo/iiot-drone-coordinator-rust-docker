@@ -2,8 +2,8 @@ FROM ros:jazzy-ros-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ros-jazzy-ros-gz installa Gazebo Harmonic come dipendenza (pairing
-# ufficiale con ROS2 Jazzy) + i pacchetti di bridging ros_gz.
+# ros-jazzy-ros-gz installs Gazebo Harmonic as dependency (official
+# pairing with ROS2 Jazzy) + ros_gz bridging packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-ros-gz \
         ros-jazzy-ros-gz-sim \

@@ -7,16 +7,16 @@
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
-    <!-- System plugin necessari lato server (headless, niente GUI) -->
+    <!-- Required server-side system plugins (headless, no GUI) -->
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"></plugin>
 
-    <!-- Abilita il servizio /world/empty/create usato per lo spawn dei droni -->
+    <!-- Enables the /world/empty/create service used for spawning drones -->
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"></plugin>
 
-    <!-- Necessario perché i client (bridge, gz topic, gui) vedano lo stato del mondo -->
+    <!-- Required so clients (bridge, gz topic, gui) see the world state -->
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"></plugin>
 
-    <!-- Sensori/IMU: richiesti dal modello X3 (barometro, imu, ecc.) -->
+    <!-- Sensors/IMU: required by the X3 model (barometer, imu, etc.) -->
     <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
@@ -46,8 +46,8 @@
       </link>
     </model>
 
-    <!-- Nessun drone qui: vengono spawnati a runtime, uno per container,
-         chiamando il servizio /world/empty/create dal rispettivo container. -->
+    <!-- No drones here: they are spawned at runtime, one per container,
+         by calling the /world/empty/create service from their respective container. -->
 
   </world>
 </sdf>
