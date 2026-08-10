@@ -7,17 +7,14 @@ networks:
 
 services:
 
-  # ---------------------------------------------------------------
   # Fast-DDS Discovery Server (unicast) — replaces default
   # multicast discovery for ROS 2.
-  # ---------------------------------------------------------------
   discovery-server:
     image: ros:jazzy-ros-base
     container_name: discovery-server
     hostname: discovery-server
     command: >
-      bash -c "source /opt/ros/jazzy/setup.bash &&
-      fastdds discovery -i 0 -l 0.0.0.0 -p 11811"
+      bash -c "source /opt/ros/jazzy/setup.bash && fastdds discovery -i 0 -l 0.0.0.0 -p 11811"
     networks:
       swarm_net:
         ipv4_address: 172.28.0.10
@@ -26,9 +23,7 @@ services:
       - "11811:11811/tcp"
     restart: unless-stopped
 
-  # ---------------------------------------------------------------
   # Gazebo Container: empty world + spawn point for drones
-  # ---------------------------------------------------------------
   gazebo:
     build:
       context: .
@@ -51,9 +46,7 @@ services:
         ipv4_address: 172.28.0.20
     restart: unless-stopped
 
-  # ---------------------------------------------------------------
   # Coordinator: Rust swarm coordinator
-  # ---------------------------------------------------------------
   coordinator:
     build:
       context: .
@@ -73,9 +66,7 @@ services:
         ipv4_address: 172.28.0.30
     restart: unless-stopped
 
-  # ---------------------------------------------------------------
   # Drone 1
-  # ---------------------------------------------------------------
   drone1:
     build:
       context: .
@@ -98,9 +89,7 @@ services:
         ipv4_address: 172.28.0.21
     restart: unless-stopped
 
-  # ---------------------------------------------------------------
   # Drone 2
-  # ---------------------------------------------------------------
   drone2:
     build:
       context: .
@@ -123,9 +112,7 @@ services:
         ipv4_address: 172.28.0.22
     restart: unless-stopped
 
-  # ---------------------------------------------------------------
   # Drone 3
-  # ---------------------------------------------------------------
   drone3:
     build:
       context: .

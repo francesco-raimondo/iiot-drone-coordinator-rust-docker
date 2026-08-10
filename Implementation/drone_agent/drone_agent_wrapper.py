@@ -37,6 +37,8 @@ class DroneAgentWrapper(Node):
         self.heartbeat_pub = self.create_publisher(String, "/swarm/heartbeat", qos_profile)
 
         # Timers
+        # after running rclpy.spin(node) each 2 seconds the function publish_registration is called
+        # after running rclpy.spin(node) each 1 second the function publish_heartbeat is called
         self.registration_timer = self.create_timer(2.0, self.publish_registration)
         self.heartbeat_timer = self.create_timer(1.0, self.publish_heartbeat)
 
