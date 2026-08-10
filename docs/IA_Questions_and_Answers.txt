@@ -97,6 +97,7 @@ Gazebo Transport (il layer di gz sim stesso, usato da ros_gz_sim create per chia
 
 
 
+
 [QUESTION 3] 
 guarda il @terminal:bash, il container gazebo dà diversi errori, inoltre non capisco se il meccaniscmo col discovery server per permettere ai vari container di vedersi e al container gazebo di vedere i container dei droni funziona
 
@@ -142,6 +143,7 @@ Posso modificare i file per risolvere il problema dei log di Permission denied e
 
 
 
+
 [QUESTION 4]
 vorrei mantenere la rete docker bridge, correggi la configurazione
 
@@ -179,6 +181,7 @@ ROS 2 Discovery Server: Ogni drone vede gli agenti degli altri droni (drone2_age
 
 
 
+
 [QUESTION 5]
 Ok, la comunicazione funziona, ora vorrei sfruttare però la mia scheda video per l'accelerazione grafica, è una scheda video integrata del processore, una iris plus graphics 655
 
@@ -195,6 +198,7 @@ Consentendo l'accesso a /dev/dri, i driver Mesa OpenGL / VA-API eseguiti dentro 
 
 
 
+
 [QUESTION 6]
 in diversi file di questa folder ci saranno sicuramente dei commenti in itaiano. Voglio che traduci tutti quei commenti che sono in italiano in inglese. NON MODIFICARE NIENT'ALTRO. fai solo questa traduzione se vedi qualche commento scritto in italiano
 
@@ -204,19 +208,121 @@ Ho controllato tutti i file presenti nella cartella del progetto ed eseguito la 
 
 Ecco un riepilogo dei file in cui sono stati aggiornati i commenti:
 
-
-
 docker-compose.yml
 : tradotti i commenti che descrivono i servizi (discovery-server, gazebo, coordinator, drone1, drone2, drone3).
-
 
 Dockerfile.gazebo
 : tradotti i commenti relativi all'installazione di Gazebo Harmonic e dei pacchetti ros_gz.
 
-
 entrypoint_gazebo.sh
 : tradotti i commenti esplicativi sulla configurazione DDS unicast, Gazebo Transport e i messaggi di output di echo.
 
-
 empty_discovery.sdf
 : tradotti i commenti XML relativi ai plugin di sistema e allo spawn dinamico dei droni.
+
+
+
+
+[QUESTION 7]
+Analizza per bene questa repository.
+come vedi dal 
+
+docker-compose.yml
+ per ora vado a definire i servizi dei droni staticamente
+
+docker-compose.yml#L69-136
+ .  
+
+Tuttavia vorrei introdurre scalabilità riguardo ai droni, permettendo all'utente di scegliere quanti droni vuole creare andando semplicemente a definirlo tramite docker con "--scale drone=N".
+
+Controlla anche i file 
+
+entrypoint_drone.sh
+ e 
+
+drone_agent_wrapper.py
+ e modificali di conseguenza.
+
+Crea quindi un Implementation plan IN ITALIANO dove spieghi tutte le modifiche da attuare per introdurre questa scalabilità.
+
+
+[ANSWER 7]
+Ho analizzato la repository e creato l'Implementation Plan per introdurre la scalabilità dinamica dei droni tramite docker compose up --scale drone=N.
+
+Puoi consultare il piano dettagliato qui: 
+implementation_plan.md
+
+Sintesi delle modifiche previste:
+
+docker-compose.yml
+: Rimuoveremo i servizi statici (drone1, drone2, drone3) e gli IP statici, sostituendoli con un unico servizio scalabile drone.
+
+entrypoint_drone.sh
+: Aggiungeremo il calcolo automatico dell'IP del container (GZ_OWN_IP), del nome univoco del drone (DRONE_NAME) e delle coordinate di spawn (SPAWN_X, SPAWN_Y, SPAWN_Z) basate sull'indice del container per evitare sovrapposizioni in Gazebo.
+
+drone_agent_wrapper.py
+: Utilizzeremo le variabili d'ambiente calcolate dall'entrypoint per inizializzare il nodo ROS 2 e inviare la registrazione/heartbeat al coordinator.
+Fammi sapere se approvi il piano per procedere con l'implementazione!
+
+
+
+
+[QUESTION 8]
+come puoi vedere da [bash](terminal;24398) ho runnato il docker compose prima con --scale drone=4 e poi con --scale drone=2 e i droni sono spawnati (come vedi anche dall'entity tree dell'immagine che ti ho appena allegato), tuttavia come stai vedendo dall'entity tree e anche da terminale, il nome di questi droni su gazebo non è uniforme, non si chiamano tutti "drone_1", "drone_2", etc...
+
+Io vorrei fare in modo che il drone che spawna il container drone-1 si andrà a chiamare  drone_1, e così via per gli altri container dei droni che vado a spawnare dinamicamente. Cosa si dovrebbe modificare? si dovrebbe andare a modificare qualcosa nel [entrypoint_drone.sh](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/entrypoints/entrypoint_drone.sh) e nel [drone_agent_wrapper.py](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/drone_agent/drone_agent_wrapper.py) ?  
+Crea implementation plan in italiano.
+
+
+[ANSWER 8]
+Ho analizzato il motivo dell'inconsistenza nei nomi e ho creato il nuovo Implementation Plan in italiano: 
+implementation_plan.md
+.
+
+Causa del problema:
+In Docker Compose, la seconda colonna di /etc/hosts contiene l'hash dell'hostname casuale del container (77c87b5611df). Gli alias con il nome del container (es. implementation-drone-1) si trovano nelle colonne successive. Di conseguenza, lo script di entrypoint precedente non riusciva ad estrarre correttamente l'indice 1, 2, ecc. ed usava il valore di fallback.
+
+Soluzione proposta:
+Modificheremo 
+
+entrypoint_drone.sh
+ per scansionare tutti gli alias in /etc/hosts cercando il pattern drone-<N> o drone_<N>. Estrarremo l'indice esatto $N$ e imposteremo:
+
+DRONE_NAME="drone_${INDEX}" (es. drone_1, drone_2, ..., drone_N)
+SPAWN_X calcolato di conseguenza per drone_1 ($X=0.0$), drone_2 ($X=1.5$), etc.
+Questo garantirà che sia il nodo ROS 2, sia i log, sia l'Entity Tree in Gazebo Sim visualizzino esattamente drone_1, drone_2, ecc.
+
+Confermi che posso procedere con le modifiche ai file?
+
+
+
+
+[QUESTION 9]
+guarda @terminal:bash , ho runnato il docker compose con --scale drone=2. Un drone si chiama correttamente drone_1, ma l'altro è drone_983
+
+
+[ANSWER 9]
+Ho individuato la causa esatta del problema ed elaborato il nuovo Implementation Plan: 
+implementation_plan.md
+.
+
+Perché si generava drone_983 e x: 1473.0:
+In Docker Compose v2, il file /etc/hosts interno al container non registra i nomi testuali dei container scalati, ma solo l'ID esadecimale (nel tuo caso l'hostname del container drone-2 iniziava con 983...). Lo script non trovando drone-2 in /etc/hosts andava in fallback sull'hostname esadecimale estraendo 983, nominando il drone drone_983 e posizionandolo a $X = (983 - 1) \times 1.5 = 1473.0$ metri!
+
+Soluzione con Docker DNS:
+Docker Compose mantiene un server DNS interno (127.0.0.11) che conosce sempre la mappa esatta dei droni scalati (drone-1, drone-2, drone-3 ...).
+
+Modificheremo 
+
+entrypoint_drone.sh
+ affinché interroghi il server DNS di Docker per confrontare l'IP del container con l'IP registrato per drone-1, drone-2, ecc.:
+
+drone-1 (match IP) $\rightarrow$ DRONE_NAME="drone_1", SPAWN_X=0.0
+drone-2 (match IP) $\rightarrow$ DRONE_NAME="drone_2", SPAWN_X=1.5
+drone-N (match IP) $\rightarrow$ DRONE_NAME="drone_N", SPAWN_X=(N-1)*1.5
+Confermi che posso procedere con la modifica di entrypoint_drone.sh?
+
+
+
+
+[QUESTION 10]
