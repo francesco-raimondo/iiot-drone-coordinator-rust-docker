@@ -13,27 +13,34 @@ if [ -z "$GZ_OWN_IP" ]; then
   GZ_OWN_IP=$(hostname -I | awk '{print $1}')
 fi
 
-# Detect drone ID and numeric index dynamically
+# Detect drone ID and numeric index dynamically using Docker DNS resolution
 if [ -z "$DRONE_NAME" ]; then
-  CONTAINER_HOST=$(hostname)
-  ALIAS_NAME=$(grep -E 'drone[-_]?[0-9]+' /etc/hosts | awk '{print $2}' | head -n 1 || true)
-  if [ -n "$ALIAS_NAME" ]; then
-    INDEX=$(echo "$ALIAS_NAME" | grep -oE '[0-9]+$' || true)
-  fi
+  MY_IP="$GZ_OWN_IP"
+  INDEX=""
 
-  if [ -z "$INDEX" ]; then
-    INDEX=$(echo "$CONTAINER_HOST" | grep -oE '[0-9]+$' || true)
-  fi
+  # Query Docker embedded DNS for hostnames matching drone-N or implementation-drone-N
+  for i in $(seq 1 50); do
+    RESOLVED_IP=$(getent hosts "drone-$i" | awk '{print $1}' || true)
+    if [ -z "$RESOLVED_IP" ]; then
+      RESOLVED_IP=$(getent hosts "implementation-drone-$i" | awk '{print $1}' || true)
+    fi
+
+    if [ "$RESOLVED_IP" = "$MY_IP" ]; then
+      INDEX="$i"
+      break
+    fi
+  done
 
   if [ -n "$INDEX" ]; then
-    DRONE_NAME="drone${INDEX}"
+    DRONE_NAME="drone_${INDEX}"
   else
-    LAST_OCTET=$(echo "$GZ_OWN_IP" | awk -F'.' '{print $NF}')
-    INDEX="$LAST_OCTET"
-    DRONE_NAME="drone_${CONTAINER_HOST}"
+    DRONE_NAME="drone_1"
+    INDEX=1
   fi
 else
+  # Extract numeric index from explicit DRONE_NAME and normalize to drone_<INDEX>
   INDEX=$(echo "$DRONE_NAME" | grep -oE '[0-9]+$' || echo "1")
+  DRONE_NAME="drone_${INDEX}"
 fi
 
 # Calculate spawn X coordinate dynamically if not set explicitly (spacing 1.5 meters)
