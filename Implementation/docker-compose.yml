@@ -36,9 +36,11 @@ services:
       DISCOVERY_SERVER_IP: "172.28.0.10"
       DISCOVERY_SERVER_PORT: "11811"
       GZ_OWN_IP: "172.28.0.20"
+      GZ_SIM_RESOURCE_PATH: "/app/models"
       DISPLAY: "${DISPLAY:-:0}"
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./models:/app/models:ro
     devices:
       - /dev/dri:/dev/dri
     networks:
@@ -61,6 +63,9 @@ services:
       DISCOVERY_SERVER_PORT: "11811"
       GZ_OWN_IP: "172.28.0.30"
       WORLD_NAME: "empty"
+      DRONE_MODEL_PATH: "/app/models/x3_uav/model.sdf"
+    volumes:
+      - ./models:/app/models:ro
     networks:
       swarm_net:
         ipv4_address: 172.28.0.30

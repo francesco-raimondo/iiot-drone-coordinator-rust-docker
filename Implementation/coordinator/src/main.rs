@@ -81,9 +81,12 @@ fn listen_and_spawn_drones(spawned_drones: Arc<Mutex<HashSet<String>>>) {
 
 fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
     let world = std::env::var("WORLD_NAME").unwrap_or_else(|_| "empty".to_string());
+    let model_path = std::env::var("DRONE_MODEL_PATH")
+        .unwrap_or_else(|_| "/app/models/x3_uav/model.sdf".to_string());
+
     println!(
-        "[coordinator] Executing spawn for {} in world '{}'...",
-        payload.drone_id, world
+        "[coordinator] Executing spawn for {} in world '{}' using model '{}'...",
+        payload.drone_id, world, model_path
     );
 
     let output = Command::new("ros2")
@@ -102,7 +105,7 @@ fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
             "-z",
             &payload.z.to_string(),
             "-file",
-            "https://fuel.gazebosim.org/1.0/OpenRobotics/models/X3 UAV",
+            &model_path,
         ])
         .output();
 
