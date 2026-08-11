@@ -326,3 +326,71 @@ Confermi che posso procedere con la modifica di entrypoint_drone.sh?
 
 
 [QUESTION 10]
+[main.rs#L104-104](textBlock;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/coordinator/src/main.rs#L104-104) come vedi per ora carico droni scaricando i modelli online. Tuttavia vorrei invece avere il file di configurazione del drone e fare in modo che si carico il modello grafico del drone a partire dal file. 
+
+
+[ANSWER 10]
+In Gazebo e ROS 2 (in particolare usando il comando ros2 run ros_gz_sim create), per fare in modo che il modello grafico/3D del drone venga caricato da un file locale anziché da internet (Gazebo Fuel), occorre agire su tre punti fondamentali:
+
+Predisporre il file di modello locale (ad esempio un file .sdf o .urdf, con la cartella del modello contenente model.config e model.sdf oppure un file unico SDF).
+Fornire il file o il percorso al container/coordinator: il file del modello deve essere presente (o montato tramite volume Docker) nel filesystem dove gira il container del coordinator o dove risiede Gazebo, oppure passato tramite variabile d'ambiente/configurazione.
+Aggiornare il comando nel Coordinator (Rust): Invece di passare l'URL https://fuel.gazebosim.org/..., il parametro -file accetta il percorso assoluto o relativo di un file di modello locale (es. /models/drone/model.sdf o ./models/x3/model.sdf).
+Come funziona ros_gz_sim create con file locali:
+Se usi il flag -file, ros_gz_sim create accetta direttamente:
+
+Il percorso locale a un file .sdf o .urdf (es. -file /app/models/x3/model.sdf)
+Oppure puoi usare -string passando direttamente la stringa XML/SDF del modello.
+Opzioni di Implementazione consigliate:
+Variabile d'ambiente per il percorso del modello (Consigliato per flessibilità): Nel file main.rs possiamo leggere una variabile d'ambiente DRONE_MODEL_PATH (o DRONE_MODEL_FILE).
+
+Se definita, usa il file locale (es. std::env::var("DRONE_MODEL_PATH")).
+Altrimenti usa come fallback l'URL Fuel o un modello predefinito.
+Montare la cartella dei modelli nei container via Docker Compose: Si crea una cartella models/ nel repository contenente le risorse/SDF dei droni e la si monta come volume sia nel container gazebo che nel container coordinator.
+
+Vuoi procedere creando una cartella models/ locale con il modello del drone (SDF/URDF) e aggiornare il coordinator in Rust per leggere il percorso da file/ambiente?
+
+
+
+
+[QUESTION 11]
+mi ha dato questo errore su [bash](terminal;21657) :
+gazebo            | [Err] [UserCommands.cc:928] Error Code 19: Msg: A link named base_link has invalid inertia.
+
+
+[ANSWER 11]
+L'errore Error Code 19: Msg: A link named base_link has invalid inertia si verifica in Gazebo quando la matrice d'inerzia (i valori ixx, iyy, izz) di un elemento rigido infrange la regola della disuguaglianza triangolare per i momenti di inerzia della fisica reale: $$\begin{aligned} ixx + iyy &\ge izz \ ixx + izz &\ge iyy \ iyy + izz &\ge ixx \end{aligned}$$
+
+Nei valori precedenti, $0.0347532 + 0.0458929 = 0.0806461$, che risultava inferiore a $izz = 0.0977$.
+
+Ho aggiornato il file 
+
+model.sdf
+ correggendo i valori di inerzia in:
+
+ixx: 0.08
+iyy: 0.08
+izz: 0.12
+I valori ora soddisfano perfettamente i vincoli fisici di Gazebo. Siccome la cartella models/ è montata come volume in Docker Compose, non c'è bisogno di ricompilare le immagini; puoi riavviare subito la simulazione con docker compose up --scale drone=N.
+
+
+
+
+[QUESTION 12]
+guarda questo modello grafico, è troppo minimale, vorrei un modello grafico stile drone, con le 4 elice agli angoli che si capisca sia un drone. ma non una grafica troppo elaborata. 
+
+
+[ANSWER 12]
+Ho aggiornato il file 
+
+model.sdf
+ costruendo un vero modello grafico 3D da quadricottero (senza appesantire la simulazione).
+
+Elementi del nuovo modello:
+Corpo centrale: cilindro centrale compatto (grigio metallizzato).
+4 Bracci a X:
+I due bracci anteriori sono evidenziati in rosso (per distinguere l'orientamento/fronte del drone).
+I due bracci posteriori in nero.
+4 Eliche/Rotori: dischi semitrasparenti azzurri posizionati alle estremità di ciascun braccio.
+Piedini di atterraggio: 4 supporti verticali sotto i bracci per far riposare il drone a terra.
+Dato che i modelli risiedono nel volume condiviso Docker ./models, puoi rilanciare docker compose up --scale drone=5 senza dover ricompilare le immagini.
+
