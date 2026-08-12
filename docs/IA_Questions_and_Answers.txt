@@ -394,3 +394,245 @@ I due bracci posteriori in nero.
 Piedini di atterraggio: 4 supporti verticali sotto i bracci per far riposare il drone a terra.
 Dato che i modelli risiedono nel volume condiviso Docker ./models, puoi rilanciare docker compose up --scale drone=5 senza dover ricompilare le immagini.
 
+
+
+
+[QUESTION 13]
+Analizza la repository.
+Non sono un espero di Gazebo e ROS2 e per ora non ho modo di far volare i droni. Qual è il modo migliore per permettere ai droni che spawno di volare? Serve aggiungere una configurazione precisa? E come faccio a verificare che posso farli volare in maniera rapida?
+
+
+[ANSWER 13]
+Analizziamo la situazione attuale e come far volare i droni in Gazebo Sim (Ignition / gz-sim) con ROS 2.
+
+1. Perché i droni per ora non volano?
+Nel modello SDF attuale (model.sdf), l'oggetto x3 ha soltanto la geometria visiva, le masse e le collisioni. Non ha plugin attivi per il controllo o la dinamica di volo.
+
+In Gazebo (trattandosi della versione moderna Gazebo Sim / Ignition), per muovere un multirotore/drone ci sono 2 approcci principali:
+
+Approccio A: Plugin di Cinematica/Controllo Diretto (gz::sim::systems::MulticopterVelocityControl) [CONSIGLIATO]
+Gazebo Sim include un plugin nativo chiamato gz::sim::systems::MulticopterVelocityControl.
+
+Come funziona: Riceve comandi di velocità (inviati sul topic Gazebo /X3/gazebo/command/twist o /cmd_vel) e applica automaticamente le forze aerodinamiche e le spinte ai motori per mantenere l'assetto e far volare il drone dove richiesto.
+Vantaggi: Leggero, facilissimo da configurare direttamente nel file model.sdf del drone, non richiede uno stack complesso come PX4/ArduPilot per iniziare ed è ideale per testare la coordinazione tra nodi ROS2/Rust.
+Approccio B: Plugin di controllo motori individuali (MulticopterMotorModel)
+Si collegano 4 o più plugin (uno per ogni elica) applicando le forze di spinta spinta ($F = k \cdot \omega^2$). Richiede un controller di volo (es. PX4 via MAVROS o un controller PID custom in ROS2). È più complesso e pesante per la simulazione.
+
+2. Configurazione da aggiungere al file model.sdf
+Per attivare il controllo di velocità con l'Approccio A, si inserisce nel file 
+
+model.sdf
+ (all'interno del blocco <model name="x3">) il plugin MulticopterVelocityControl:
+
+xml
+<plugin
+  filename="gz-sim-multicopter-velocity-control-system"
+  name="gz::sim::systems::MulticopterVelocityControl">
+  <robotNamespace>X3</robotNamespace>
+  <commandSubTopic>gazebo/command/twist</commandSubTopic>
+  <enableSubTopic>gazebo/command/motor_speed</enableSubTopic>
+  <comLinkName>base_link</comLinkName>
+  <velocityDecay>0.1 0.1 0.1</velocityDecay>
+  <!-- Guadagni del controller per l'assetto e la velocità -->
+  <rotorVelocityGain>0.05</rotorVelocityGain>
+  <rotorVelocityPGain>0.1</rotorVelocityPGain>
+  <rotorVelocityIGain>0.0</rotorVelocityIGain>
+  <rotorVelocityDGain>0.0</rotorVelocityDGain>
+</plugin>
+Inoltre, per far comunicare ROS 2 con Gazebo (in modo che il nodo agente del drone o un comando da terminale invii messaggi di tipo geometry_msgs/msg/Twist), si usa ros_gz_bridge per fare il bridging del topic /cmd_vel verso /gazebo/command/twist.
+
+3. Come verificare rapidamente che i droni possono volare?
+Puoi fare un test rapido in 2 modi senza scrivere codice complesso:
+
+Metodo 1: Comando veloce gz topic dentro il container gazebo (Test Nativo Gazebo)
+Quando la simulazione è avviata con docker compose up:
+
+Entra nel container gazebo:
+bash
+docker exec -it gazebo bash
+Invia un comando di decollo (velocità lineare sull'asse Z di 0.5 m/s):
+bash
+gz topic -t "/X3/gazebo/command/twist" -m gz.msgs.Twist -p "linear: {x: 0, y: 0, z: 0.5}, angular: {x: 0, y: 0, z: 0}"
+Se il drone si solleva da terra, significa che la fisica e il plugin di volo stanno funzionando correttamente.
+Metodo 2: Tramite topic ROS 2 (ros2 topic pub)
+Se colleghi il bridge ROS 2 (ros_gz_bridge) per il topic /drone_1/cmd_vel:
+
+bash
+docker exec -it drone_1 bash
+ros2 topic pub /drone_1/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0, y: 0.0, z: 1.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"
+Vuoi procedere con la configurazione?
+Se vuoi, posso preparare la modifica per aggiornare 
+
+model.sdf
+ ed eventualmente configurare ros_gz_bridge per consentire ai tuoi nodi in ROS 2 / agenti di inviare direttamente comandi di volo ai droni spawnati.
+ 
+ 
+ 
+ 
+[QUESTION 14]
+ Scelgo l'approccio A. Crea un implementation plan IN ITALIANO per apportare queste modifiche. tieni conto che, come vedi dal [docker-compose.yml](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/docker-compose.yml) io ho definito un solo servizio chiamato "drone" che poi vado a scalare con "docker compose up --scale drone=2". Quindi io devo poter essere in grado di scegliere quale drone far volare e VEDERE VISIVAMENTE SU GAZEBO il drone che si muove
+ 
+ 
+[ANSWER 14]
+Ho creato l'Implementation Plan per configurare il volo dei droni in Gazebo Sim usando l'approccio MulticopterVelocityControl e permettere di comandare individualmente ciascun drone spawnato tramite docker compose up --scale drone=N.
+Puoi consultare il piano dettagliato nel file 
+implementation_plan.md
+Fammi sapere se approvi il piano per procedere con l'esecuzione delle modifiche sui file del progetto!
+
+
+
+
+[QUESTION 15]
+Sul terminale nei log di docker vedo degli errori generato sul container di gazebo:
+[bash](terminal;44735) gazebo            | [Err] [UserCommands.cc:928] Error Code 1: Msg: Error parsing XML in file [/app/models/x3_uav/model.sdf]: Error=XML_ERROR_MISMATCHED_ELEMENT ErrorID=14 (0xe) Line number=7: XMLElement name=link
+gazebo            | [Err] [UserCommands.cc:928] Error Code 1: Msg: Unable to read file: [/app/models/x3_uav/model.sdf]
+
+e poi
+[bash](terminal;44735) gazebo            | [Err] [SystemLoader.cc:92] Failed to load system plugin [gz-sim-multicopter-velocity-control-system] : Could not find shared library.
+
+
+[ANSWER 15]
+Ho individuato e corretto gli errori:
+Il primo errore XML nel file è stato corretto così: 
+model.sdf
+: mancava il tag di chiusura </link> prima della dichiarazione del plugin <plugin>.
+
+Per quanto riguarda il secondo errore era dovuto al fatto che Gazebo Sim (versione Harmonic) necessita dell'estensione esplicita della libreria condivisa (.so) per caricare il plugin del multicottero: libgz-sim-multicopter-velocity-control-system.so.
+
+Ho aggiornato la riga corrispondente nel file model.sdf
+
+Ora puoi rieseguire il comando per verificare che il plugin venga caricato correttamente senza errori:
+
+docker compose up --build --scale drone=2
+
+
+
+
+[QUESTION 16]
+ho fatto alcune modifiche,  ora come vedi da [bash](terminal;44735) non ci sono più errori, tuttavia non riesco comunque a far volare i droni, ecco quello che ho scoperto:
+
+
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec gazebo gz topic -l | grep drone_1
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec gazebo gz topic -e -t /world/empty/pose/info -n 1 | grep -A 5 "drone_1"
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec gazebo gz topic -t /model/drone_1/cmd_vel -m gz.msgs.Twist -p "linear: {z: 1.0}"
+OCI runtime exec failed: exec failed: unable to start container process: exec: "gz": executable file not found in $PATH
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec -it implementation-drone-1 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic list"
+/parameter_events
+/rosout
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec gazebo gz topic -t /model/drone_1/cmd_vel -m gz.msgs.Twist -p "linear: {z: 1.0}"
+OCI runtime exec failed: exec failed: unable to start container process: exec: "gz": executable file not found in $PATH
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec -it gazebo bash -c "export GZ_PARTITION=swarm && source /opt/ros/jazzy/setup.bash && gz topic -l"
+/clock
+/drone_1/cmd_vel
+/drone_2/cmd_vel
+/gazebo/resource_paths
+/gui/camera/pose
+/gui/currently_tracked
+/gui/track
+/stats
+/world/empty/clock
+/world/empty/dynamic_pose/info
+/world/empty/pose/info
+/world/empty/scene/deletion
+/world/empty/scene/info
+/world/empty/state
+/world/empty/stats
+/command/motor_speed
+/model/drone_1/cmd_vel
+/model/drone_1/enable
+/model/drone_2/cmd_vel
+/model/drone_2/enable
+/world/empty/light_config
+/world/empty/material_color
+francesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ docker exec -it implementation-drone-1 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic pub /drone_1/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.0, y: 0.0, z: 0.5}}'"
+publisher: beginning loop
+publishing #1: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #2: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #3: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #4: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #5: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #6: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #7: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #8: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #9: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #10: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+publishing #11: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.5), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))
+^Cfrancesco@francesco-HP-250-G8-Notebook-PC:~/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation$ 
+
+
+come vedi alla fine ci sono i messaggi pubblishing, però il drone su gazebo non si muove
+
+
+[ANSWER 16]
+Analizzando la tua scoperta e i log del terminale, l'infrastruttura è ora molto più vicina al funzionamento completo rispetto a prima!
+Dall'output che hai ottenuto con gz topic -l nel container Gazebo, notiamo due cose fondamentali:
+
+Gazebo sta correttamente pubblicando e ascoltando i topic per ogni drone:
+/model/drone_1/cmd_vel
+/model/drone_1/enable
+/model/drone_2/cmd_vel
+/model/drone_2/enable
+Perché i messaggi ROS 2 pubblicati non arrivavano a Gazebo? Ci sono due motivi precisi:
+GZ_PARTITION=swarm: Gazebo sta lavorando sulla partizione di rete swarm. Quando ros_gz_bridge nei container drone partiva, se non ereditava GZ_PARTITION=swarm, parlava su una partizione Gazebo diversa e i messaggi non raggiungevano la simulazione.
+Sintassi di remap del bridge: Il parametro passed a ros_gz_bridge doveva specificare il topic Gazebo sorgente /model/${DRONE_NAME}/cmd_vel prima del remap ROS 2 su /${DRONE_NAME}/cmd_vel.
+Modifica applicata
+Ho aggiornato il file 
+
+entrypoint_drone.sh
+ per impostare e inoltrare correttamente GZ_PARTITION=swarm e collegare il topic ROS 2 a quello di Gazebo.
+
+Prova ora la verifica (dopo aver avviato docker compose up):
+Una volta riavviato docker compose up --build --scale drone=2, puoi fare la prova sia via ROS 2 che via Gazebo nativo:
+
+Opzione 1: Test Nativo via Gazebo (gz topic)
+Ora che sappiamo che la CLI di gz si trova dentro il container gazebo (avviabile con source /opt/ros/jazzy/setup.bash ed esportando la partizione):
+
+bash
+docker exec -it gazebo bash -c "export GZ_PARTITION=swarm && source /opt/ros/jazzy/setup.bash && gz topic -t /model/drone_1/cmd_vel -m gz.msgs.Twist -p 'linear: {z: 1.0}'"
+Opzione 2: Test via ROS 2 dal container del drone
+bash
+docker exec -it implementation-drone-1 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic pub /drone_1/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.0, y: 0.0, z: 0.5}}'"
+Esegui il docker compose up --build --scale drone=2 e prova uno di questi comandi per vedere finalmente il drone prendere quota!
+
+
+
+
+[QUESTION 17]
+ti confermo che con questo comando: 
+docker exec -it gazebo bash -c "export GZ_PARTITION=swarm && source /opt/ros/jazzy/setup.bash && gz topic -t /model/drone_1/cmd_vel -m gz.msgs.Twist -p 'linear: {z: 1.0}'"
+ho visto il drone muoversi. poi sono passato al drone 2, ma stavolta runnando questo comando:
+
+docker exec -it implementation-drone-2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic pub /drone_2/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.0, y: 0.0, z: 0.5}}'"
+Mi comparivano al solito i messaggi di pubblishing ma il drone nonsi muove. Però ho scoperto che basta modificar eil comando in questo modo per far partire anche il drone 2 tramite test ROS2:
+
+docker exec -it implementation-drone-2 bash -c "export ROS_DISCOVERY_SERVER=172.28.0.10:11811 && source /opt/ros/jazzy/setup.bash && ros2 topic pub --once /drone_2/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.0, y: 0.0, z: 1.0}}'"
+
+A quanto pare dicendogli esplicitamente chi è il discovery server la comunicazione avviene con successo. Che sia il solito problema legato al multicast UDP mal gestito da docker su rete bridge?
+
+
+[ANSWER 17]
+Ecco l'analisi completa di quanto osservato, senza effettuare alcuna modifica ai file come richiesto.
+
+Perché con quel comando il drone si è mosso e cosa è successo?
+Nel comando che hai eseguito:
+
+bash
+docker exec -it implementation-drone-2 bash -c "export ROS_DISCOVERY_SERVER=172.28.0.10:11811 && source /opt/ros/jazzy/setup.bash && ros2 topic pub --once /drone_2/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.0, y: 0.0, z: 1.0}}'"
+Sono successe due cose decisive:
+
+export ROS_DISCOVERY_SERVER=172.28.0.10:11811: Senza esportare esplicitamente questa variabile quando apri una nuova sotto-shell con docker exec, il comando ros2 topic pub prova a scoprire i nodi usando il meccanismo multicast di default (SIMPLE). Su reti container Docker con bridge isolate, il multicast spesso fallisce nel contattare il ros_gz_bridge. Dichiarando la variabile, il publisher si connette subito al Fast-DDS Discovery Server (172.28.0.10), che aggrega tutti i nodi della rete ROS 2.
+
+--once (Pubblicazione singola con attesa della sottoscrizione): In ROS 2, il flag --once fa sì che la CLI attenda che ci sia almeno 1 subscriber attivo prima di inviare il messaggio. Quando hai lanciato il comando, la CLI ha stampato: Waiting for at least 1 matching subscription(s)... E non appena ros_gz_bridge si è sintonizzato sul topic, ha inviato il messaggio Twist facendo decollare il drone!
+
+Risposta alla tua domanda: 
+La risposta è sì, c'è infatti un aspetto chiave da tenere in considerazione per il prosieguo del progetto:
+
+Le variabili d'ambiente nelle sessioni interattive docker exec
+Quando esegui comandi manuali di test con docker exec -it ... bash -c "...", le variabili dichiarate nel Dockerfile/entrypoint di background non sempre vengono ereditate dalla nuova sotto-shell se usi bash -c.
+
+Cosa significa: Per fare test manuali via ros2 topic pub, dovrai sempre ricordarti di includere export ROS_DISCOVERY_SERVER=172.28.0.10:11811 nel comando docker exec.
+
+
+
+
+
