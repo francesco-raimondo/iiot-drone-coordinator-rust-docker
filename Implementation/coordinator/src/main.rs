@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fs;
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc, Mutex};
@@ -81,12 +82,47 @@ fn listen_and_spawn_drones(spawned_drones: Arc<Mutex<HashSet<String>>>) {
 
 fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
     let world = std::env::var("WORLD_NAME").unwrap_or_else(|_| "empty".to_string());
-    let model_path = std::env::var("DRONE_MODEL_PATH")
+    let template_path = std::env::var("DRONE_MODEL_PATH")
         .unwrap_or_else(|_| "/app/models/x3_uav/model.sdf".to_string());
 
+    // The model.sdf on disk is a template: the MulticopterVelocityControl
+    // plugin requires a non-empty <robotNamespace>, and that namespace must
+    // be unique per drone (it becomes the literal topic prefix the plugin
+    // subscribes cmd_vel on). If every spawned drone shared the same
+    // namespace they would all listen on the same topic and steal each
+    // other's velocity commands. So for every spawn we materialize a
+    // per-drone copy of the SDF with the placeholder replaced by
+    // "/model/<drone_id>", matching what the ros_gz_bridge in
+    // entrypoint_drone.sh remaps "/<drone_id>/cmd_vel" to.
+    let robot_namespace = format!("/model/{}", payload.drone_id);
+
+    let sdf_template = match fs::read_to_string(&template_path) {
+        Ok(content) => content,
+        Err(e) => {
+            println!(
+                "[coordinator] ERROR: Failed to read model template '{}': {}",
+                template_path, e
+            );
+            return;
+        }
+    };
+
+    let sdf_instance = sdf_template.replace("__ROBOT_NAMESPACE__", &robot_namespace);
+
+    let instance_path = format!("/app/spawned/{}_model.sdf", payload.drone_id);
+    if let Err(e) = fs::write(&instance_path, sdf_instance) {
+        println!(
+            "[coordinator] ERROR: Failed to write per-drone model file '{}': {}",
+            instance_path, e
+        );
+        return;
+    }
+
+    let model_path = instance_path;
+
     println!(
-        "[coordinator] Executing spawn for {} in world '{}' using model '{}'...",
-        payload.drone_id, world, model_path
+        "[coordinator] Executing spawn for {} in world '{}' using model '{}' (namespace '{}')...",
+        payload.drone_id, world, model_path, robot_namespace
     );
 
     let output = Command::new("ros2")

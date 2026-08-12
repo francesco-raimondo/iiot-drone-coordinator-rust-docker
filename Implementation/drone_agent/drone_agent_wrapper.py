@@ -5,6 +5,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 
 
@@ -35,6 +36,7 @@ class DroneAgentWrapper(Node):
         # Publishers
         self.registration_pub = self.create_publisher(String, "/swarm/register", qos_profile)
         self.heartbeat_pub = self.create_publisher(String, "/swarm/heartbeat", qos_profile)
+        self.cmd_vel_pub = self.create_publisher(Twist, f"/{self.drone_id}/cmd_vel", 10)
 
         # Timers
         # after running rclpy.spin(node) each 2 seconds the function publish_registration is called

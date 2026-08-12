@@ -98,66 +98,6 @@
         </material>
       </visual>
 
-      <!-- VISUAL 6: Rotor FL (Cylinder + Blade) -->
-      <visual name="rotor_fl_visual">
-        <pose>0.2 0.2 0.02 0 0 0</pose>
-        <geometry>
-          <cylinder>
-            <radius>0.1</radius>
-            <length>0.008</length>
-          </cylinder>
-        </geometry>
-        <material>
-          <ambient>0.0 0.7 0.9 0.7</ambient>
-          <diffuse>0.0 0.7 0.9 0.7</diffuse>
-        </material>
-      </visual>
-
-      <!-- VISUAL 7: Rotor FR (Cylinder + Blade) -->
-      <visual name="rotor_fr_visual">
-        <pose>0.2 -0.2 0.02 0 0 0</pose>
-        <geometry>
-          <cylinder>
-            <radius>0.1</radius>
-            <length>0.008</length>
-          </cylinder>
-        </geometry>
-        <material>
-          <ambient>0.0 0.7 0.9 0.7</ambient>
-          <diffuse>0.0 0.7 0.9 0.7</diffuse>
-        </material>
-      </visual>
-
-      <!-- VISUAL 8: Rotor BL (Cylinder + Blade) -->
-      <visual name="rotor_bl_visual">
-        <pose>-0.2 0.2 0.02 0 0 0</pose>
-        <geometry>
-          <cylinder>
-            <radius>0.1</radius>
-            <length>0.008</length>
-          </cylinder>
-        </geometry>
-        <material>
-          <ambient>0.0 0.7 0.9 0.7</ambient>
-          <diffuse>0.0 0.7 0.9 0.7</diffuse>
-        </material>
-      </visual>
-
-      <!-- VISUAL 9: Rotor BR (Cylinder + Blade) -->
-      <visual name="rotor_br_visual">
-        <pose>-0.2 -0.2 0.02 0 0 0</pose>
-        <geometry>
-          <cylinder>
-            <radius>0.1</radius>
-            <length>0.008</length>
-          </cylinder>
-        </geometry>
-        <material>
-          <ambient>0.0 0.7 0.9 0.7</ambient>
-          <diffuse>0.0 0.7 0.9 0.7</diffuse>
-        </material>
-      </visual>
-
       <!-- VISUAL 10: Landing Leg FL -->
       <visual name="leg_fl_visual">
         <pose>0.2 0.2 -0.05 0 0 0</pose>
@@ -219,5 +159,351 @@
       </visual>
 
     </link>
+
+    <!-- ======================================================= -->
+    <!-- ROTOR LINKS (real physical bodies, one per propeller)    -->
+    <!-- Layout (X pattern, matches the arm visuals on base_link):-->
+    <!--   rotor_0 = Front-Left  (ccw)   rotor_1 = Front-Right (cw)-->
+    <!--   rotor_2 = Back-Left   (cw)    rotor_3 = Back-Right  (ccw)-->
+    <!-- Diagonal pairs spin the same direction so yaw torque    -->
+    <!-- cancels out in hover, as required for a quadrotor.      -->
+    <!-- ======================================================= -->
+
+    <link name="rotor_0">
+      <pose>0.2 0.2 0.02 0 0 0</pose>
+      <inertial>
+        <mass>0.009</mass>
+        <inertia>
+          <ixx>1.75e-05</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.75e-05</iyy>
+          <iyz>0</iyz>
+          <izz>3.5e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name="rotor_0_collision">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+      </collision>
+      <visual name="rotor_0_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.0 0.7 0.9 0.7</ambient>
+          <diffuse>0.0 0.7 0.9 0.7</diffuse>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="rotor_0_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>rotor_0</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <link name="rotor_1">
+      <pose>0.2 -0.2 0.02 0 0 0</pose>
+      <inertial>
+        <mass>0.009</mass>
+        <inertia>
+          <ixx>1.75e-05</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.75e-05</iyy>
+          <iyz>0</iyz>
+          <izz>3.5e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name="rotor_1_collision">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+      </collision>
+      <visual name="rotor_1_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.0 0.7 0.9 0.7</ambient>
+          <diffuse>0.0 0.7 0.9 0.7</diffuse>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="rotor_1_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>rotor_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <link name="rotor_2">
+      <pose>-0.2 0.2 0.02 0 0 0</pose>
+      <inertial>
+        <mass>0.009</mass>
+        <inertia>
+          <ixx>1.75e-05</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.75e-05</iyy>
+          <iyz>0</iyz>
+          <izz>3.5e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name="rotor_2_collision">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+      </collision>
+      <visual name="rotor_2_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.0 0.7 0.9 0.7</ambient>
+          <diffuse>0.0 0.7 0.9 0.7</diffuse>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="rotor_2_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>rotor_2</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <link name="rotor_3">
+      <pose>-0.2 -0.2 0.02 0 0 0</pose>
+      <inertial>
+        <mass>0.009</mass>
+        <inertia>
+          <ixx>1.75e-05</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.75e-05</iyy>
+          <iyz>0</iyz>
+          <izz>3.5e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name="rotor_3_collision">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+      </collision>
+      <visual name="rotor_3_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.1</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.0 0.7 0.9 0.7</ambient>
+          <diffuse>0.0 0.7 0.9 0.7</diffuse>
+        </material>
+      </visual>
+    </link>
+
+    <joint name="rotor_3_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>rotor_3</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <!-- ======================================================= -->
+    <!-- MULTICOPTER MOTOR MODEL PLUGINS (one per rotor)          -->
+    <!-- These convert commanded rotor speed into actual thrust   -->
+    <!-- and drag applied to each rotor link. Required for the    -->
+    <!-- MulticopterVelocityControl plugin below to work: it only -->
+    <!-- computes the target rotor speeds, it does not apply any  -->
+    <!-- force by itself.                                         -->
+    <!-- ======================================================= -->
+
+    <plugin
+      filename="gz-sim-multicopter-motor-model-system"
+      name="gz::sim::systems::MulticopterMotorModel">
+      <robotNamespace></robotNamespace>
+      <jointName>rotor_0_joint</jointName>
+      <linkName>rotor_0</linkName>
+      <turningDirection>ccw</turningDirection>
+      <timeConstantUp>0.0125</timeConstantUp>
+      <timeConstantDown>0.025</timeConstantDown>
+      <maxRotVelocity>800.0</maxRotVelocity>
+      <motorConstant>8.54858e-06</motorConstant>
+      <momentConstant>0.016</momentConstant>
+      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <actuator_number>0</actuator_number>
+      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
+      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <motorType>velocity</motorType>
+    </plugin>
+
+    <plugin
+      filename="gz-sim-multicopter-motor-model-system"
+      name="gz::sim::systems::MulticopterMotorModel">
+      <robotNamespace></robotNamespace>
+      <jointName>rotor_1_joint</jointName>
+      <linkName>rotor_1</linkName>
+      <turningDirection>cw</turningDirection>
+      <timeConstantUp>0.0125</timeConstantUp>
+      <timeConstantDown>0.025</timeConstantDown>
+      <maxRotVelocity>800.0</maxRotVelocity>
+      <motorConstant>8.54858e-06</motorConstant>
+      <momentConstant>0.016</momentConstant>
+      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <actuator_number>1</actuator_number>
+      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
+      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <motorType>velocity</motorType>
+    </plugin>
+
+    <plugin
+      filename="gz-sim-multicopter-motor-model-system"
+      name="gz::sim::systems::MulticopterMotorModel">
+      <robotNamespace></robotNamespace>
+      <jointName>rotor_2_joint</jointName>
+      <linkName>rotor_2</linkName>
+      <turningDirection>cw</turningDirection>
+      <timeConstantUp>0.0125</timeConstantUp>
+      <timeConstantDown>0.025</timeConstantDown>
+      <maxRotVelocity>800.0</maxRotVelocity>
+      <motorConstant>8.54858e-06</motorConstant>
+      <momentConstant>0.016</momentConstant>
+      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <actuator_number>2</actuator_number>
+      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
+      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <motorType>velocity</motorType>
+    </plugin>
+
+    <plugin
+      filename="gz-sim-multicopter-motor-model-system"
+      name="gz::sim::systems::MulticopterMotorModel">
+      <robotNamespace></robotNamespace>
+      <jointName>rotor_3_joint</jointName>
+      <linkName>rotor_3</linkName>
+      <turningDirection>ccw</turningDirection>
+      <timeConstantUp>0.0125</timeConstantUp>
+      <timeConstantDown>0.025</timeConstantDown>
+      <maxRotVelocity>800.0</maxRotVelocity>
+      <motorConstant>8.54858e-06</motorConstant>
+      <momentConstant>0.016</momentConstant>
+      <commandSubTopic>command/motor_speed</commandSubTopic>
+      <actuator_number>3</actuator_number>
+      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
+      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
+      <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
+      <motorType>velocity</motorType>
+    </plugin>
+
+    <!-- ======================================================= -->
+    <!-- MULTICOPTER VELOCITY CONTROL PLUGIN (Flight Dynamics)    -->
+    <!-- Subscribes to cmd_vel (Twist), computes the rotor speeds -->
+    <!-- needed to achieve that body-frame velocity/yaw rate, and -->
+    <!-- writes them for the 4 MulticopterMotorModel plugins above-->
+    <!-- to actually turn into thrust. robotNamespace is left     -->
+    <!-- empty on purpose: gz-sim then auto-scopes the topic to   -->
+    <!-- /model/<spawned_name>/cmd_vel, which matches what the    -->
+    <!-- ros_gz_bridge in entrypoint_drone.sh remaps to.          -->
+    <!-- ======================================================= -->
+    <plugin
+      filename="libgz-sim-multicopter-control-system.so"
+      name="gz::sim::systems::MulticopterVelocityControl">
+      <robotNamespace>__ROBOT_NAMESPACE__</robotNamespace>
+      <commandSubTopic>cmd_vel</commandSubTopic>
+      <enableSubTopic>enable</enableSubTopic>
+      <comLinkName>base_link</comLinkName>
+
+      <velocityGain>3.3 3.3 3.5</velocityGain>
+      <attitudeGain>5.0 5.0 0.9</attitudeGain>
+      <angularRateGain>1.5 1.5 0.09</angularRateGain>
+
+      <maximumLinearAcceleration>2 2 2</maximumLinearAcceleration>
+      <maximumLinearVelocity>5 5 5</maximumLinearVelocity>
+      <maximumAngularVelocity>3 3 3</maximumAngularVelocity>
+
+      <linearVelocityNoiseMean>0 0 0</linearVelocityNoiseMean>
+      <linearVelocityNoiseStdDev>0 0 0</linearVelocityNoiseStdDev>
+      <angularVelocityNoiseMean>0 0 0</angularVelocityNoiseMean>
+      <angularVelocityNoiseStdDev>0 0 0</angularVelocityNoiseStdDev>
+
+      <rotorConfiguration>
+        <rotor>
+          <jointName>rotor_0_joint</jointName>
+          <forceConstant>8.54858e-06</forceConstant>
+          <momentConstant>0.016</momentConstant>
+          <direction>1</direction>
+        </rotor>
+        <rotor>
+          <jointName>rotor_1_joint</jointName>
+          <forceConstant>8.54858e-06</forceConstant>
+          <momentConstant>0.016</momentConstant>
+          <direction>-1</direction>
+        </rotor>
+        <rotor>
+          <jointName>rotor_2_joint</jointName>
+          <forceConstant>8.54858e-06</forceConstant>
+          <momentConstant>0.016</momentConstant>
+          <direction>-1</direction>
+        </rotor>
+        <rotor>
+          <jointName>rotor_3_joint</jointName>
+          <forceConstant>8.54858e-06</forceConstant>
+          <momentConstant>0.016</momentConstant>
+          <direction>1</direction>
+        </rotor>
+      </rotorConfiguration>
+    </plugin>
+
   </model>
 </sdf>

@@ -69,6 +69,13 @@ until getent hosts discovery-server > /dev/null 2>&1; do
   sleep 1
 done
 
+echo "[$DRONE_NAME] Launching ROS 2 bridge for /${DRONE_NAME}/cmd_vel..."
+export GZ_PARTITION=swarm
+ros2 run ros_gz_bridge parameter_bridge \
+    "/model/${DRONE_NAME}/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist" \
+    --ros-args -r "/model/${DRONE_NAME}/cmd_vel:=/${DRONE_NAME}/cmd_vel" &
+
 echo "[$DRONE_NAME] Launching ROS 2 drone agent wrapper..."
 exec python3 /drone_ws/drone_agent_wrapper.py
+
 
