@@ -635,4 +635,286 @@ Cosa significa: Per fare test manuali via ros2 topic pub, dovrai sempre ricordar
 
 
 
+[QUESTION 18]
+Visto che in [traccia-progetto.md](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/.agents/rules/traccia-progetto.md) c'è scritto che posso usare anche Kani, che dovrebbe essere più semplice visto che si basa su programmazione in rust. Quindi ho scelto di passare a quello. Ti mando in allegato anche un prototipo delle 2 FSM che ho fatto. Lo stato di ogni drone quindi sarà composto da una coppia di 2 stati (S1,S2) dove S1 è il valore dello stato della FSM1 e S2 è il valore dello stato della FSM2
+
+Questi sarebbero gli eventi che scatenano il passaggio da uno stato all'altro per gli archi per la FSM 1:
+
+1) Unregistered -> Active:  quando il drone si registra e è visibile nel grafo ROS 2 (quindi quando il coordinator lo spawna)
+2) Active -> Suspected: quando dopo 5 secondi dall'ultimo Hearbeat ancora non ne è arrivato un'altro
+3) Suspected -> Failed: quando dopo 10 secondi dall'ultimo Heartbeat ancora non ne è arrivato un'altro (e si procede poi con la riparazione)
+4) Suspected -> Active: quando dopo 5 secondi dall'ultimi Heartbeat alla fine ne arriva un'altro, quindi si conferma lo stato di attività del drone e il ritardo era dovuto solo a un ritardo di rete
+5) Failed -> unregistered: quando il drone viene riparato (quindi in questo stato può inviare nuovamente la richiesta di registrazione) 
+
+
+Questi sarebbero gli eventi che scatenano il passaggio da uno stato all'altro per gli archi per la FSM 2:
+
+1) Follower -> Candidate:  di default quando il coordinator invia il comando di formare una formazione attorno al leader, il drone attivo è un "follower. Ma quando il leader è in Failed (stato FSM1) tutti i droni diventano candidate 
+2) Candidate -> Leader: Tra tutti i droni che ora sono candidati il coordinator sceglie casualmente un leader tra i droni candidate.
+3) Candidate -> Follower: Quando un nuovo drone viene eletto leader, gli altri devono tornare a essere follower di questo leader
+
+Possono bastare questi stati con questi archi? Noti qualche problema o incongruenza con la traccia o qualcosa che manca?
+
+
+
+[ANSWER 18]
+Analizzando i tuoi diagrammi delle FSM (FSM1: Health Status e FSM2: Role) e le definizioni degli archi, l'approccio complessivo è solido, chiaro e ben strutturato per la modellazione formalizzata e la verifica formale con Kani in Rust.
+
+Tuttavia, confrontando il modello con la traccia del progetto e con casi d'uso reali di coordinamento di droni, ci sono alcune importanti osservazioni, casi limite (corner cases) e piccole incongruenze/mancanze che occorre considerare prima di formalizzare tutto.
+
+🔍 1. Analisi di FSM 1 (Health / Presence State)
+Stati attuali: Unregistered, Active, Suspected, Failed.
+
+Punti critici & Osservazioni su FSM 1:
+Ripristino/Transizione Failed -> Unregistered (Arco 5):
+
+Descrizione tua: quando il drone viene riparato passa in Unregistered, consentendogli di inviare nuovamente la richiesta di registrazione.
+Nota/Corner Case: Se il drone si trova in Failed ma non è stato distrutto fisicamente o il container viene riavviato (recovery agent), chi innesca la riparazione?
+Se il recupero è gestito dal Coordinator (es. riavvio Docker o comando di reset), il drone deve ri-inviare il messaggio di registrazione dal suo stato iniziale. Quindi l'arco Failed -> Unregistered ha perfettamente senso, ma va precisato se l'evento è un evento esterno ("repaired/rebooted") o un timeout di recovery.
+Cosa succede se un drone in Suspected crasha del tutto?
+
+L'arco Suspected -> Failed scatta dopo 10s. Questo va bene. Ma se riceve l'heartbeat tra 5s e 10s torna in Active (Arco 4). Perfetto.
+🔍 2. Analisi di FSM 2 (Role State)
+Stati attuali: Follower, Candidate, Leader.
+
+Punti critici & Incongruenze su FSM 2 (Molto Importanti!):
+Chi e Quando va in Candidate? (Incongruenza tra traccia e arco 1)
+
+Descrizione tua per Arco 1: "quando il leader è in Failed (stato FSM1) tutti i droni diventano candidate".
+Incongruenza/Rischio: Se anche il Leader stesso avesse la FSM 2, se lui fallisce (in FSM 1), chiaramente lui non partecipa alla ri-elezione. Ma soprattutto, se solo i droni vivi/Active partecipano all'elezione, la transizione da Follower -> Candidate deve avvenire per i droni il cui stato FSM 1 è Active (o al massimo Suspected), quando rilevano che l'attuale Leader è in Failed.
+Stato del Leader in FSM 2: Quando un drone è in Leader, se FSM 1 del Leader va in Failed, il Leader cessa di essere Leader. Che stato assume in FSM 2 se viene riparato o dismesso? Deve tornare Follower o Candidate una volta ri-registrato. Mancano gli archi di uscita da Leader (ad es. Leader -> Follower o Leader -> Candidate in caso di failure/reset del leader stesso).
+Risoluzione della scelta del Leader (Arco 2):
+
+Descrizione tua per Arco 2: "Tra tutti i droni candidate il coordinator sceglie casualmente un leader".
+Osservazione: Se è il Coordinator (Runtime centralizzato in Rust) a scegliere casualmente/per ID il leader, la fase Candidate per il drone è uno stato transitorio in cui il drone attende la conferma di elezione o di essere follower.
+Corner Case per Kani: Per verificare con Kani che esista sempre un solo Leader (Safety Property: No Two Leaders), bisogna garantire che la transizione dei droni perdenti da Candidate -> Follower avvenga nello stesso step atomico o che non vi sia una finestra temporale in cui ci siano 0 leader o 2 leader contemporaneamente.
+🚨 3. Interazione tra le due FSM (Matrice degli Stati Composti $(S1, S2)$)
+Il tuo stato complessivo per un agente/drone è una coppia $(S1, S2)$. Non tutte le combinazioni di $(S1, S2)$ sono valide o ammissibili!
+
+Per la verifica formale con Kani, definire gli invarianti di stato (ovvero quali coppie sono impossibili) è fondamentale.
+
+Stato FSM1 ($S1$)	Stato FSM2 ($S2$)	Valido?	Note
+Unregistered	Follower / Candidate / Leader	❌ Non Valido	Un drone non registrato non può avere un ruolo nella formazione. Dovrebbe avere un ruolo None / Idle o default Follower inattivo.
+Failed	Leader / Candidate	❌ Non Valido	Un drone guasto NON può essere Leader né Candidate.
+Failed	Follower	⚠️ Inattivo	Un drone guasto non segue più i comandi.
+Active	Follower / Candidate / Leader	✅ Valido	È la normale operatività.
+Suspected	Follower / Candidate / Leader	⚠️ Attenzione	Se il Leader va in Suspected (ritardo di rete), si elegge subito un altro leader o si aspetta Failed? Se si aspetta Failed, in Suspected mantiene il suo ruolo attuale.
+💡 Suggerimenti per completare la FSM per Kani
+Per rendere il modello in Rust perfettamente verificabile con Kani senza vicoli ciechi (deadlocks o stati inconsistenti), ti consiglio di aggiungere/chiarire questi dettagli:
+
+Aggiungere uno stato None / Unassigned a FSM 2:
+Quando FSM 1 è Unregistered o Failed, il ruolo in FSM 2 dovrebbe essere None (o Follower per default, ma specificando che è inattivo).
+Definire la transizione da Leader in caso di Guasto o Nuova Elezione:
+Se il drone è Leader e va in Failed (FSM 1), il suo ruolo FSM 2 passa a Candidate/Follower appena viene riparato (Unregistered -> Active).
+Invariante Globale di Sistema (da verificare con Kani):
+Proprietà di Safety: $\le 1$ drone attivo può essere Leader in qualsiasi momento.
+Proprietà di Liveness/Recovery (Traccia del progetto): Se il Leader va in Failed, entro $N$ passi temporali un nuovo drone Active transita nello stato Leader.
+Summary delle risposte alle tue domande:
+Bastano questi stati ed archi? Sì, la struttura concettuale a 2 FSM è ottima e snella per Kani. Devi solo aggiungere la gestione dell'uscita dallo stato di Leader quando un leader fallisce e definire il ruolo iniziale di un drone Unregistered.
+Ci sono incongruenze con la traccia? No, rispetta in pieno i requisiti di leader election e tolleranza ai guasti (Fault Tolerance via heartbeat). È un'ottima scelta semplificare l'elezione lasciando che sia il Coordinator Rust a selezionare il candidato (o tramite un criterio deterministico come min(drone_id) tra i Candidate).
+
+
+
+
+[QUESTION 19]
+Ok, ecco allora una definizione più formale di come dovrebbe essere il tutto, definendo anche gli eventi e quale evento fa scattare cosa:
+sapendo che lo stato del drone è (S1, S2) dove S1 è lo stato in FSM1 e S2 è lo stato in FSM2
+
+innanzitutto ogni drone assumerà all'inizio lo stato iniziale (Unregistered, None)
+
+EVENTI:
+1) Registrazione avvenuta con successo, il coordinator spawna il drone >>> da S=(Unregistered, None) a S=(Active, Candidate)
+
+2) Coordinator scelgie il primissimo leader >>> un drone passerà da S=(Active,Candidate) a S=(Active, Leader), gli altri passeranno invece da S=(Active,Candidate) a S=(Active, Follower).
+
+Ci tengo a precisare solo da questo momento in poi il coordinator può iniziare a inviare ordini ai droni di disporsi n formazione attorno al leader
+
+3) è da più di 5 secondi che non arriva un nuovo heartbeat da un drone >>> 
+o da S=(Active, Candidate) a S=(Suspected, Candidate), 
+o da S=(Active, Follower) a S=(Suspected, Follower)
+o da S=(Active, Leader) a S=(Suspected, Leader)
+
+4) I droni sono in fase di suspected e Il nuovo hearbeat arriva entro 10 secondi dall'ultimo heartbeat >>>  
+o da S=(Suspected, Candidate) a S=(Active, Candidate), 
+o da S=(Suspected, Follower) a S=(Active, Follower)
+o da S=(Suspected, Leader) a S=(Active, Leader)
+
+5) I droni sono in fase di suspected ed è da più di 10 secondi che non arriva un nuovo heartbead dal drone, il drone fallisce (es: perchè entra in collide con un ostacolo) >>>
+o da S=(Suspected, Candidate) a S=(Failed, None), 
+o da S=(Suspected, Follower) a S=(Failed, None), 
+o da S=(Suspected, Leader) a S=(Failed, None), 
+
+Per ora come ti sembra? Dimmi il tuto parere fino a qua, perchè poi ho delle cose da chiederti sull'evento legato alla riparazione. Intanto analizza questi passaggi
+6) Riparazione di un drone (che simulo semplicemente con un tempo di riparazione casuale fra 5 sec e 20 sec >>>
+
+
+[ANSWER 19]
+Questa definizione formalizzata per tuple di stato $(S1, S2)$ ed eventi è eccellente e risolve perfettamente tutti i dubbi che avevamo sollevato al passo precedente!
+
+Ecco un'analisi dettagliata dei punti punti di forza, di cosa succede nello stato del sistema e delle considerazioni per la verifica formale in Rust/Kani:
+
+✅ Punti di Forza della Nuova Formalizzazione
+Introduzione dello stato None per FSM2:
+
+Lo stato iniziale $(Unregistered, None)$ e il passaggio a $(Failed, None)$ cancellano qualsiasi ambiguità: un drone che non è registrato o che è in errore non ha alcun ruolo nel gruppo. Questo impedisce comportamenti errati (es. droni guasti che ricevono o eseguono comandi).
+Fase di Bootstrapping Chiara (Eventi 1 e 2):
+
+L'Evento 1 porta tutti i droni spawnati in $(Active, Candidate)$.
+L'Evento 2 rompe la simmetria: il Coordinator sceglie 1 Leader $\rightarrow (Active, Leader)$, e tutti i restanti diventano $(Active, Follower)$.
+La precisione sul fatto che solo dopo la scelta del primissimo leader il coordinator invia comandi di formazione evita race conditions all'avvio del sistema.
+Indipendenza Ortogonale del Timed-Heartbeat (Eventi 3 e 4):
+
+Gli Eventi 3 e 4 mantengono inalterato il ruolo $S2$ (Candidate, Follower o Leader) durante il transitorio di sospetto (Suspected). Questo riflette perfettamente la rete reale: un ritardo temporaneo ($>5s$ e $<10s$) non fa perdere la carica al Leader o il ruolo ai Follower/Candidate, riducendo l'instabilità del sistema (flapping).
+Reset pulito in caso di Guasto (Evento 5):
+
+Qualsiasi sia il ruolo in $S2$, il guasto definitivo ($>10s$) porta lo stato a $(Failed, None)$. Se il drone guasto era il Leader, questo farà scattare la ri-elezione tra i droni rimasti Active.
+🔍 Dettagli Tecnici da Notare (in vista di Kani e della Simulazione)
+Cosa succede all'elezione quando il Leader va in Failed?
+
+Quando il Leader passa a $(Failed, None)$, gli altri droni Active che erano $(Active, Follower)$ devono passare a $(Active, Candidate)$ per consentire l'elezione del nuovo Leader.
+Notazione per l'evento: Questo evento di ri-elezione si aggancerà proprio al fatto che il Leader corrente è entrato in Failed.
+Modellazione del tempo per Kani (5s e 10s):
+
+Kani lavora tramite Bounded Model Checking (verifica simbolica del codice Rust). In Kani non misuriamo il tempo reale in secondi del sistema operativo, ma modelliamo i timer come contatori discreti di "tick" (es. heartbeat_ticks: u8).
+Esempio:
+ticks > 5 $\rightarrow$ Transizione a Suspected
+ticks > 10 $\rightarrow$ Transizione a Failed
+Questo rende la verifica con Kani istantanea e completamente deterministica!
+🚀 Risposta al tuo quesito (fino al punto 5)
+Il tuo schema fino al punto 5 è promosso a pieni voti. È pulito, logicamente coerente, privo di vicoli ciechi e perfettamente adatto ad essere implementato in Rust (usando degli enum per $S1$ e $S2$) e verificato con Kani.
+
+Ora dimmi pure le tue idee/domande riguardo al punto 6 (Riparazione del drone tra 5s e 20s)! Come avevi pensato di gestire la ri-registrazione e il re-ingresso nella FSM2 per un drone riparato?
+
+
+
+
+[QUESTION 20]
+Non so di preciso come realizzare la fase di riparazione. L'evento di riparazione avviene solo quando i droni si trovano in questo stato:
+
+ S=(Failed, None) 
+
+Ora, quando un drone è riparato, dovrebbe tornare allo stato S1= unregistered? (il che implica quindi andare proprio a rimuoverlo dal grafo ROS2 e farlo registrare di nuovo), Oppure allo stato S1=active? (Quindi matenerlo nel grafo ROS2)
+
+Inoltre ho un secondo dubbio, e riguarda il valore che dovrebbe avere S2 una volta che il drone viene riparato. Indipendentemente dal ruolo che aveva il drone nel momento in cui è fallito (candidate/follower/leader) dovrebbe rimanere sempre S2=None? E poi a quel punto chiamo il coordinator per verificare se è stato eletto un leader e se si faccio passare S2 da None a Follower, altrimenti faccio passare S2 da None a Candidate? Oppure faccio che quando il drone è stato riparato il coordinatore non può assegnarli alcun ruolo finchè il leader non è stato eletto, e solo dopo che il coordinator ha eletto il leader avviene il passaggio di S2 da None a Follower?
+Che ne pensi?
+
+
+[ANSWER 20]
+I tuoi dubbi sulla riparazione toccano punti fondamentali dell'architettura sia dal punto di vista ROS 2 / Docker che della modellazione formale.
+
+Analizziamo i due dubbi separatamente per trovare la soluzione più pulita e coerente con la traccia del progetto!
+
+❓ Dubbio 1: $S1$ dopo la riparazione deve passare a Unregistered o ad Active?
+💡 Raccomandazione: Passare da (Failed, None) a (Unregistered, None)
+Perché Unregistered è la scelta migliore:
+
+Coerenza concettuale e ciclo di vita in ROS 2: Quando un drone va nello stato Failed in una simulazione reale con Docker/ROS 2, significa che il nodo non sta più comunicando, o il container viene riavviato (simulando il ripristino dell'hardware o dello script). Far ripartire il drone dallo stato Unregistered rispetta il principio di Idempotenza: un drone riparato viene trattato dal Coordinator esattamente come un drone appena spawnato per la prima volta.
+
+Semplificazione del Coordinator: Il Coordinator non deve contenere una logica speciale per i droni "re-integrati" diversa da quelli "nuovi". Deve solo ascoltare le richieste di registrazione. Quando arriva una richiesta di registrazione da un drone riparato, esegue la classica procedura di onboarding.
+
+Nel grafo ROS 2: In ROS 2, il lifecycle o la re-registrazione comporta che il drone invii nuovamente un messaggio di Handshake/Registration sul topic di gestione (es. /swarm/register). Transitare per Unregistered simula esattamente questo ri-invio del pacchetto di registrazione.
+
+❓ Dubbio 2: Quale valore deve assumere $S2$ (ruolo) dopo la riparazione e come si reintegra nella formazione?
+💡 Soluzione Lineare e Robusta per la FSM e per Kani:
+Distinguiamo due casi durante la riparazione di un drone:
+
+Caso A: C'è GIÀ un Leader attivo nello swarm
+Se il drone viene riparato e passa a $(Unregistered, None) \rightarrow (Active, \dots)$:
+
+Quando invia la registrazione, il Coordinator rileva che un Leader esiste già.
+Pertanto, il Coordinator gli assegna direttamente il ruolo di Follower.
+La transizione completa è:
+Riparazione: $(Failed, None) \rightarrow (Unregistered, None)$
+Registrazione accettata: $(Unregistered, None) \rightarrow (Active, Follower)$ (Non serve neanche farlo passare per Candidate, perché la carica di Leader è già occupata!)
+Caso B: NON c'è un Leader (il swarm era senza leader o in fase di elezione)
+Se il drone si ripara proprio mentre il leader precedente è guasto e il gruppo è in ri-elezione:
+
+La registrazione lo porta a $(Active, Candidate)$.
+Partecipa alla ri-elezione insieme agli altri droni Candidate.
+📜 Tabella Completa dell'Evento 6 (Riparazione e Re-integrazione)
+Riepilogando la logica formale aggiornata dell'Evento 6 e delle sue conseguenze:
+
+Step	Stato Iniziale	Evento Scatenante	Stato Finale	Descrizione
+6a	$(Failed, None)$	Riparazione completata (Timer 5-20s scaduto)	$(Unregistered, None)$	Il drone è tornato operativo fisicamente e pronto a richiedere il join.
+6b	$(Unregistered, None)$	Invio richiesta registrazione al Coordinator	$(Active, Follower)$ SE esiste già un Leader attivo.
+$(Active, Candidate)$ SE non esiste un Leader attivo.	Il Coordinator accetta il drone e gli assegna il ruolo adeguato in base allo stato attuale della flotta.
+🎯 Perché questo approccio rende Kani e la Verifica Formale molto più semplici?
+Nessun deadlock sugli stati invalidi: Non esiste mai uno stato transitorio del tipo $(Active, None)$. Un drone Active ha SEMPRE un ruolo valido (Follower, Candidate o Leader).
+Deterministic State Machine: La FSM di ogni drone rimane deterministica e priva di ambiguità.
+Proprietà di Correttezza Facilmente Verificabile con Kani:
+Property: "A repaired drone NEVER directly becomes Leader if an Active Leader already exists." (Un drone riparato non diventa MAI Leader se esiste già un Leader attivo).
+Cosa ne pensi di questo flusso per l'Evento 6? Se ti convince, le due FSM e la logica degli archi sono pronte e definite al 100%!
+
+
+
+
+[QUESTION 21]
+Ok, allora gli eventi totali con passaggi di stato, il cui stato iniziale è sempre S=(Unregistered, None) sono i seguenti:
+1) Registrazione avvenuta con successo, il coordinator spawna il drone, ci sono però due casi >>> 
+
+CASO A: SE non esiste un Leader attivo.
+da S=(Unregistered, None) a S=(Active, Candidate)
+
+CASO B: SE esiste già un Leader attivo.
+da S=(Unregistered, None) a S=(Active, Follower)
+
+E ci sono questi 2 casi perchè il drone potrebbe essere stato soggetto a un fallimento prima.
+
+2) Coordinator scelgie il primissimo leader >>> un drone passerà da S=(Active,Candidate) a S=(Active, Leader), gli altri passeranno invece da S=(Active,Candidate) a S=(Active, Follower).
+
+Ci tengo a precisare solo da questo momento in poi il coordinator può iniziare a inviare ordini ai droni di disporsi n formazione attorno al leader
+
+3) è da più di 5 secondi che non arriva un nuovo heartbeat da un drone >>> 
+o da S=(Active, Candidate) a S=(Suspected, Candidate), 
+o da S=(Active, Follower) a S=(Suspected, Follower)
+o da S=(Active, Leader) a S=(Suspected, Leader)
+
+4) I droni sono in fase di suspected e Il nuovo hearbeat arriva entro 10 secondi dall'ultimo heartbeat >>>  
+o da S=(Suspected, Candidate) a S=(Active, Candidate), 
+o da S=(Suspected, Follower) a S=(Active, Follower)
+o da S=(Suspected, Leader) a S=(Active, Leader)
+
+5) I droni sono in fase di suspected ed è da più di 10 secondi che non arriva un nuovo heartbead dal drone, il drone fallisce (es: perchè entra in collide con un ostacolo) >>>
+o da S=(Suspected, Candidate) a S=(Failed, None), 
+o da S=(Suspected, Follower) a S=(Failed, None), 
+o da S=(Suspected, Leader) a S=(Failed, None), 
+
+Per ora come ti sembra? Dimmi il tuto parere fino a qua, perchè poi ho delle cose da chiederti sull'evento legato alla riparazione. Intanto analizza questi passaggi
+
+6) Riparazione di un drone (che simulo semplicemente con un tempo di riparazione casuale fra 5 sec e 20 sec), il drone torna operativo e pronto a chiedere il join  >>> 
+da S=(Failed, None) a S=(Unregistered, None)
+Come ti sembra?
+
+
+[ANSWER 21]
+Questa specifica degli Eventi da 1 a 6 è assolutamente impeccabile, completa e priva di contraddizioni! 🎯
+
+Hai formalizzato la logica in modo elegante:
+
+L'evento 1 con i due casi A e B unifica e pulisce l'ingresso nel sistema (sia al primo boot che dopo una riparazione dall'evento 6).
+L'evento 2 gestisce la primissima elezione / ri-elezione.
+Gli eventi 3, 4 e 5 gestiscono in modo temporizzato e robusto la tolleranza ai guasti (Heartbeat delay vs Failure).
+L'evento 6 chiude il ciclo di vita permettendo il recupero autonomo del drone guasto.
+🔍 Unico Piccolissimo Dettaglio da Esplicitare (Ri-elezione)
+Per completare al 100% il modello formale, c'è un solo caso che vale la pena esplicitare per chiarezza assoluta:
+
+Cosa succede quando il drone guasto (Evento 5) era il LEADER?
+
+Evento 5: Il Leader passa da $(Suspected, Leader)$ a $(Failed, None)$.
+Conseguenza Immediata (Evento di Re-Election Trigger): Poiché ora non esiste più un Leader attivo, tutti i droni che si trovavano in stato $(Active, Follower)$ o $(Suspected, Follower)$ transitano il loro ruolo FSM2 in Candidate:
+$(Active, Follower) \longrightarrow (Active, Candidate)$
+$(Suspected, Follower) \longrightarrow (Suspected, Candidate)$
+A quel punto scatta nuovamente l'Evento 2 (il Coordinator sceglie un nuovo Leader tra i Candidate disponibili).
+
+
+🟢 Verdetto per il Progetto e per Kani
+Il tuo modello è pronto per essere scritto in codice Rust e verificato con Kani.
+
+I vantaggi di questo modello che potrai evidenziare nella relazione del progetto:
+
+Assenza di Deadlock: Ogni stato ha almeno una transizione valida di uscita.
+Determinismo delle Decisioni: La separazione tra rilevamento guasti (FSM1) e ruolo (FSM2) mantiene l'architettura pulita e disaccoppiata.
+Tolleranza ai Guasti (Fault Tolerance): Il sistema risponde autonomamente alla perdita del Leader e consente il re-entry dei droni riparati senza fermare il coordinamento della flotta.
+Se sei soddisfatto di questo schema, il prossimo passo naturale potrebbe essere iniziare a definire la struttura delle struct e degli enum in Rust, oppure procedere con la scrittura degli harness Kani per verificare le proprietà del modello!
+
 
