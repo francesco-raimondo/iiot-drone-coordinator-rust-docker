@@ -918,3 +918,137 @@ Tolleranza ai Guasti (Fault Tolerance): Il sistema risponde autonomamente alla p
 Se sei soddisfatto di questo schema, il prossimo passo naturale potrebbe essere iniziare a definire la struttura delle struct e degli enum in Rust, oppure procedere con la scrittura degli harness Kani per verificare le proprietà del modello!
 
 
+
+
+[QUESTION 22]
+Va bene, visto che sono pronto a usare Kani, generami prima un implementation plan in cui crei uno scheletro da cui poi si va a implementare la logica dei vari eventi e della FSM. Considera che è la prima volta che uso Kani, quindi spiegami anche quello che fai.
+
+
+[ANSWER 22]
+Ecco la spiegazione dettagliata e semplice, riga per riga, delle righe da 7 a 54 di 
+
+lib.rs
+1. #[derive(Debug, Clone, Copy, PartialEq, Eq)] (Attributo Derivazioni)
+Prima di ogni struttura o enum, trovi questa riga in Rust. Dice al compilatore di generare automaticamente dei comportamenti standard:
+
+Debug: permette di stampare la variabile a schermo per il log (es. con println!("{:?}", stato)).
+Clone e Copy: permettono di duplicare il valore in memoria semplicemente assegnandolo (invece di spostare il possesso/ownership di Rust).
+PartialEq e Eq: permettono di fare confronti con l'operatore di uguaglianza == (es. stato1 == stato2).
+2. Le due FSM (Righe 8 - 22)
+rust
+pub enum Fsm1State {
+    Unregistered,
+    Active,
+    Suspected,
+    Failed,
+}
+Cos'è: Definisce l'enumerazione degli stati della FSM 1 (Stato di Salute del Drone).
+pub: rende l'enum pubblico e accessibile anche da altri moduli/file.
+I valori descrivono i 4 stati possibili per lo stato di presenza/salute $S1$.
+rust
+pub enum Fsm2State {
+    None,
+    Candidate,
+    Follower,
+    Leader,
+}
+Cos'è: Definisce l'enumerazione degli stati della FSM 2 (Ruolo del Drone nel Coordinamento).
+I valori descrivono i 4 ruoli possibili $S2$, includendo None quando il drone non è operativo.
+3. La Struttura dello Stato del Drone $(S1, S2)$ (Righe 24 - 38)
+rust
+pub enum DroneState / pub struct DroneState {
+    pub s1: Fsm1State,
+    pub s2: Fsm2State,
+}
+Cos'è: Definisce la coppia di stati $(S1, S2)$ che rappresenta lo stato complessivo di un singolo drone in ogni istante di tempo.
+Contiene due campi pubblici: s1 di tipo Fsm1State e s2 di tipo Fsm2State.
+rust
+impl DroneState {
+    pub fn new() -> Self {
+        DroneState {
+            s1: Fsm1State::Unregistered,
+            s2: Fsm2State::None,
+        }
+    }
+}
+Cos'è: È il blocco di implementazione dei metodi per DroneState.
+pub fn new() -> Self: È il costruttore associato. Quando crei un nuovo drone (DroneState::new()), questo restituisce lo stato iniziale di default: $(Unregistered, None)$.
+4. L'Enumerazione degli Eventi (Righe 40 - 54)
+rust
+pub enum SwarmEvent {
+    RegistrationSuccess { has_active_leader: bool },
+    LeaderSelection { is_chosen: bool },
+    HeartbeatTimeout5s,
+    HeartbeatRecovered10s,
+    DroneFailed,
+    RepairCompleted,
+    LeaderFailedReelectionTrigger,
+}
+Cos'è: È un enum Rust avanzato che modella tutti i possibili eventi del sistema che possono scatenare una transizione di stato per un drone.
+In Rust gli enum possono contenere dati associati (algebraic data types):
+RegistrationSuccess { has_active_leader: bool }: È l'Evento 1 (Registrazione avvenuta). Porta con sé un'informazione booleana (true/false) che indica al drone se al momento della registrazione esiste già un Leader attivo oppure no (per gestire il Caso A vs Caso B).
+LeaderSelection { is_chosen: bool }: È l'Evento 2 (Elezione Leader). Indica se il Coordinator ha scelto questo specifico drone come Leader (true) o come Follower (false).
+HeartbeatTimeout5s: È l'Evento 3 (>5s senza heartbeat, passaggio a Suspected).
+HeartbeatRecovered10s: È l'Evento 4 (heartbeat ripristinato entro 10s).
+DroneFailed: È l'Evento 5 (>10s senza heartbeat, drone guasto Failed).
+RepairCompleted: È l'Evento 6 (drone riparato, passaggio a Unregistered).
+LeaderFailedReelectionTrigger: È l'evento interno inviato ai Follower per farli diventare Candidate quando il Leader corrente va in Failed.
+
+
+
+
+[QUESTION 23]
+Adesso crea un implementation plan in cui vai a definire tutte le proprietà che vogliamo verificare di cui abbiamo discusso in precedenza
+
+
+[ANSWER 23]
+Ho creato l'Implementation Plan completo in italiano per la verifica formale del modello a due FSM tramite Kani.
+
+Puoi consultare il piano dettagliato qui: 
+implementation_plan.md
+
+📋 In sintesi, il piano prevede:
+Creare la cartella dedicata verification/ nella radice del repository per contenere il crate Rust del modello formale.
+Definire le strutture dati (Fsm1State, Fsm2State, Drone, CoordinatorState) e la funzione pura di transizione step(event).
+Implementare gli Harness Kani (#[kani::proof]) per verificare formalmente:
+Unicità del Leader: Impossibilità di avere $\ge 2$ Leader attivi.
+Consistenza del Ruolo: Unregistered o Failed implicano sempre Role = None.
+Recovery Bound: Il ripristino deterministico a 1 Leader a seguito del guasto del Leader attuale.
+Re-integrazione Sicura: Gestione corretta dei casi A e B quando un drone viene riparato (Evento 6).
+Quando sei pronto, conferma pure il piano per procedere con la creazione della cartella verification e l'implementazione del codice di verifica!
+
+
+
+
+[QUESTION 24]
+guarda su [bash](terminal;12047), confermi che il modello Kani ha verificato con successo tutte le proprietà?
+
+
+[ANSWER 24]
+Si! La modellazione e la verifica formale con Kani delle 2 FSM per lo sciame di droni sono state create ed eseguite con successo al 100% nella cartella 
+
+Kani_verify
+.
+
+📋 Sintesi del lavoro svolto:
+Creazione del Crate Rust: È stata creata la cartella 
+
+Kani_verify
+ contenente il modello FSM in 
+
+Kani_verify/src/lib.rs
+.
+
+Codifica del Modello e degli Eventi:
+
+Stati $S1$: Unregistered, Active, Suspected, Failed
+Stati $S2$: None, Candidate, Follower, Leader
+Eventi 1-6 con logica per i Casi A e B di registrazione, timeout Heartbeat (5s e 10s), ri-elezione del Leader e recupero da guasto/riparazione (Evento 6).
+Verifica Formale con Kani: Sono stati eseguiti e superati con esito VERIFICATION:- SUCCESSFUL 3 Harness di Proof simbolici:
+
+proof_inactive_role_is_none: Verifica che droni Unregistered o Failed abbiano sempre ruolo None.
+proof_suspected_role_preservation: Verifica che lo stato temporaneo di Suspected non alteri il ruolo FSM 2.
+proof_swarm_single_leader_and_recovery: Verifica che esista sempre al massimo 1 Leader, che il fallimento del Leader scateni una ri-elezione pulita e che un drone riparato (Evento 6) si re-integri correttamente come Follower se un Leader è già presente.
+I dettagli completi sono stati documentati nell'artifact 
+walkthrough.md
+.
