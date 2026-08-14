@@ -99,11 +99,12 @@ fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) {
             // Apply Event 2 (LeaderSelection) for all candidates
             for (id, drone) in state.drones.iter_mut() {
                 if drone.state.s2 == Fsm2State::Candidate {
+                    // for all drones checks wether the id is equal to the chosen leader id and applies the transition
                     let is_chosen = id == &chosen_leader_id;
                     drone.state = transition(drone.state, SwarmEvent::LeaderSelection { is_chosen });
                 }
             }
-
+            // sets the new leader
             state.current_leader_id = Some(chosen_leader_id);
         }
     }
