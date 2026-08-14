@@ -1,0 +1,53 @@
+[QUESTION 25]
+ok, Adesso qual è il modo migliore di procedere? Il mio obiettivo è fare in modo che il coordinator gestisca i droni facendo in modo che assumano gli stati delle FSM di cui abbiamo verificato le proprietà. Inoltre devo gestire anche la questione delle collisioni e il fatto che i droni devono sempre mantenere la distanza di sicurezza l'uno dall'altro. Puoi verificare intanto in [model.sdf](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/models/x3_uav/model.sdf) o [model.config](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/models/x3_uav/model.config) c'è già qualcosa che può permettermi di gestire le collisioni?
+
+
+[ANSWER 25]
+1. Analisi di model.sdf per la Gestione delle Collisioni e Distanze
+Ho esaminato il file 
+
+model.sdf
+. Ecco cosa c'è attualmente nel modello e come possiamo sfruttarlo:
+
+Collisione Fisica (base_link_collision, righe 21-27):
+
+Il modello definisce una bounding box di 0.5m x 0.5m x 0.15m attorno a ciascun drone.
+Cosa significa in Gazebo: Se due droni si avvicinano a meno di 0.5m, le loro superfici geometriche si scontreranno fisicamente. Il motore di fisica di Gazebo calcolerà l'impatto e i droni sbalzeranno via/cadranno.
+Inoltre: Ogni elica (rotor_0...rotor_3) ha la sua geometria di collisione cilindrica di raggio 0.1m.
+Sensori di collisione/distanza attuali:
+
+Nel modello SDF non è ancora configurato alcun sensore attivo (Lidar, Sonar o Sensore di Contatto/Bumper plugin).
+Attualmente il drone non sa "leggere" la presenza di un ostacolo o di un altro drone tramite sensori Gazebo onboard.
+2. Come gestire la Distanza di Sicurezza e l'Evitamento delle Collisioni
+Per mantenere la distanza di sicurezza ed evitare collisioni tra droni nella formazione, ci sono due approcci complementari:
+
+Approccio A: A livello di Coordinator (Algoritmo di Formazione e Potenziali Repulsivi) - Consigliato
+Poiché il Coordinator (in Rust) conosce la posizione $(X, Y, Z)$ di tutti i droni attivi (inviata dai droni o stimata via ROS 2 pose/heartbeat):
+Offset della Formazione: Il Coordinator calcola i punti di destinazione della formazione applicando un offset di sicurezza relativo al Leader (es. offset di $2.0 \text{ metri}$ a sinistra per il Follower 1, $2.0 \text{ metri}$ a destra per il Follower 2).
+Campi di Forza Repulsiva (Artificial Potential Fields - APF): Se due droni si avvicinano a una distanza inferiore ad $1.0 \text{ metro}$, si applica un vettore di velocità repulsivo $\vec{v}_{rep}$ che spinge i droni l'uno lontano dall'altro.
+Approccio B: A livello di Gazebo (Contact Sensor Plugin)
+Possiamo aggiungere un Sensore di Contatto (Bumper) nel file model.sdf su base_link.
+Quando la bounding box tocca un altro oggetto (un altro drone o una parete), Gazebo pubblica un messaggio sul topic /drone_X/contact. Il nodo ROS2 del drone recepisce l'evento di collisione fisica e invia un segnale di guasto al Coordinator per far scattare l'Evento 5 ($Suspected/Active \rightarrow Failed$).
+3. Qual è il modo migliore di procedere adesso?
+Ora che il modello formale a due FSM è stato matematicamente verificato con Kani, il prossimo passo architetturale consiste nell'integrare questa logica a due FSM all'interno del runtime del Coordinator in Rust e collegarla ai nodi wrapper ROS2 dei droni.
+
+Ecco la roadmap passo-passo consigliata:
+
+Step 1: Integrazione FSM in Rust (Coordinator Runtime)
+   │
+   ├── Sostituire o arricchire la gestione dello stato nel Coordinator Rust
+   │   importando gli Enum Fsm1State (Health) e Fsm2State (Role) e la funzione di transizione.
+   │
+Step 2: Gestione Formazione & Distanza di Sicurezza (Coordinatore)
+   │
+   ├── Definire il calcolo della geometria di formazione (es. Formazione a V o in linea)
+   │   mantenendo un buffer di sicurezza (es. d = 2.0m) tra il Leader e i Follower.
+   │
+Step 3: Gestione del Rilevamento Guasti & Collisioni
+   │
+   ├── Integrazione del timer heartbeat (5s -> Suspected, 10s -> Failed).
+   └── Innesco dell'evento di ri-elezione del Leader quando il Leader corrente entra in Failed.
+Se concordi con questa roadmap, quando vuoi possiamo iniziare a progettare il piano di aggiornamento del Coordinator in Rust per incorporare la FSM verificata!
+
+
+
