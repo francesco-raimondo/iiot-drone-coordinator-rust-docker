@@ -1,8 +1,9 @@
+use Kani_verify::{transition, DroneState, Fsm2State, SwarmEvent};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
-use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -14,33 +15,101 @@ struct RegistrationPayload {
     z: f64,
 }
 
-fn main() {
-    println!("[coordinator] Starting Rust Swarm Coordinator...");
+#[derive(Debug, Clone)]
+struct ManagedDrone {
+    drone_id: String,
+    state: DroneState,
+    x: f64,
+    y: f64,
+    z: f64,
+}
 
-    let spawned_drones = Arc::new(Mutex::new(HashSet::<String>::new()));
+struct SwarmCoordinatorState {
+    drones: HashMap<String, ManagedDrone>,
+    current_leader_id: Option<String>,
+}
+
+impl SwarmCoordinatorState {
+    fn new() -> Self {
+        SwarmCoordinatorState {
+            drones: HashMap::new(),
+            current_leader_id: None,
+        }
+    }
+}
+
+fn main() {
+    println!("[coordinator] Starting Rust Swarm Coordinator with Verified FSM...");
+
+    let swarm_state = Arc::new(Mutex::new(SwarmCoordinatorState::new()));
 
     // Spawn listener thread for ROS 2 topic `/swarm/register`
-    let spawned_drones_clone = Arc::clone(&spawned_drones);
+    let swarm_state_clone = Arc::clone(&swarm_state);
     thread::spawn(move || {
-        listen_and_spawn_drones(spawned_drones_clone);
+        listen_and_spawn_drones(swarm_state_clone);
     });
 
     println!("[coordinator] Coordinator running and listening on ROS 2 topic /swarm/register...");
-    
-    // Main loop keeps coordinator active
+
+    // Main loop keeps coordinator active and performs periodic status logging & leader selection
     loop {
-        thread::sleep(std::time::Duration::from_secs(5));
-        if let Ok(guard) = spawned_drones.lock() {
+        thread::sleep(std::time::Duration::from_secs(3));
+        if let Ok(mut guard) = swarm_state.lock() {
+            // Check if we need to select a leader among Candidate drones
+            perform_leader_selection_if_needed(&mut guard);
+
+            let drone_summary: Vec<String> = guard
+                .drones
+                .values()
+                .map(|d| format!("{}: ({:?}, {:?})", d.drone_id, d.state.s1, d.state.s2))
+                .collect();
+
             println!(
-                "[coordinator] Swarm status: {} drone(s) spawned {:?}",
-                guard.len(),
-                *guard
+                "[coordinator] Swarm status: {} drone(s) | Leader: {:?} | States: [{}]",
+                guard.drones.len(),
+                guard.current_leader_id,
+                drone_summary.join(", ")
             );
         }
     }
 }
 
-fn listen_and_spawn_drones(spawned_drones: Arc<Mutex<HashSet<String>>>) {
+fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) {
+    // Only perform leader selection if no active leader exists
+    if state.current_leader_id.is_none() {
+        let candidates: Vec<String> = state
+            .drones
+            .iter()
+            .filter(|(_, d)| d.state.s2 == Fsm2State::Candidate)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if !candidates.is_empty() {
+            // Randomly select a leader among candidates
+            use std::collections::hash_map::RandomState;
+            use std::hash::{BuildHasher, Hasher};
+            let random_index = (RandomState::new().build_hasher().finish() as usize) % candidates.len();
+            let chosen_leader_id = candidates[random_index].clone();
+
+            println!(
+                "[coordinator] Selecting leader randomly among candidates {:?} -> Chosen: {}",
+                candidates, chosen_leader_id
+            );
+
+            // Apply Event 2 (LeaderSelection) for all candidates
+            for (id, drone) in state.drones.iter_mut() {
+                if drone.state.s2 == Fsm2State::Candidate {
+                    let is_chosen = id == &chosen_leader_id;
+                    drone.state = transition(drone.state, SwarmEvent::LeaderSelection { is_chosen });
+                }
+            }
+
+            state.current_leader_id = Some(chosen_leader_id);
+        }
+    }
+}
+
+fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     let mut child = Command::new("ros2")
         .args(&["topic", "echo", "/swarm/register", "std_msgs/msg/String"])
         .stdout(Stdio::piped())
@@ -57,22 +126,55 @@ fn listen_and_spawn_drones(spawned_drones: Arc<Mutex<HashSet<String>>>) {
         if let Ok(line_content) = line {
             let cleaned = line_content.trim();
             if cleaned.starts_with("data:") {
-                let json_str = cleaned.trim_start_matches("data:").trim().trim_matches('\'').trim_matches('"');
+                let json_str = cleaned
+                    .trim_start_matches("data:")
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"');
                 // Unescape JSON string if ROS quotes it
                 let unescaped_json = json_str.replace("\\\"", "\"");
-                
+
                 if let Ok(payload) = serde_json::from_str::<RegistrationPayload>(&unescaped_json) {
                     let drone_id = payload.drone_id.clone();
-                    let mut guard = spawned_drones.lock().unwrap();
-                    if !guard.contains(&drone_id) {
+                    let mut guard = swarm_state.lock().unwrap();
+
+                    if !guard.drones.contains_key(&drone_id) {
                         println!(
-                            "[coordinator] New drone detected: {} at ({}, {}, {}). Initiating Gazebo spawn...",
+                            "[coordinator] New drone detected: {} at ({}, {}, {}). Initial state: (Unregistered, None)",
                             drone_id, payload.x, payload.y, payload.z
                         );
-                        guard.insert(drone_id.clone());
+
+                        // Initial state: (Unregistered, None)
+                        let new_drone = ManagedDrone {
+                            drone_id: drone_id.clone(),
+                            state: DroneState::new(),
+                            x: payload.x,
+                            y: payload.y,
+                            z: payload.z,
+                        };
+                        guard.drones.insert(drone_id.clone(), new_drone);
+                        let has_active_leader = guard.current_leader_id.is_some();
                         drop(guard);
 
-                        spawn_drone_in_gazebo(&payload);
+                        // Perform Gazebo Spawn
+                        let spawn_success = spawn_drone_in_gazebo(&payload);
+
+                        if spawn_success {
+                            let mut guard = swarm_state.lock().unwrap();
+                            if let Some(drone) = guard.drones.get_mut(&drone_id) {
+                                // Event 1: RegistrationSuccess
+                                drone.state = transition(
+                                    drone.state,
+                                    SwarmEvent::RegistrationSuccess { has_active_leader },
+                                );
+                                println!(
+                                    "[coordinator] Event 1 (RegistrationSuccess) applied for {}. New state: ({:?}, {:?})",
+                                    drone_id, drone.state.s1, drone.state.s2
+                                );
+                            }
+                            // Trigger leader selection immediately if appropriate
+                            perform_leader_selection_if_needed(&mut guard);
+                        }
                     }
                 }
             }
@@ -80,20 +182,11 @@ fn listen_and_spawn_drones(spawned_drones: Arc<Mutex<HashSet<String>>>) {
     }
 }
 
-fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
+fn spawn_drone_in_gazebo(payload: &RegistrationPayload) -> bool {
     let world = std::env::var("WORLD_NAME").unwrap_or_else(|_| "empty".to_string());
     let template_path = std::env::var("DRONE_MODEL_PATH")
         .unwrap_or_else(|_| "/app/models/x3_uav/model.sdf".to_string());
 
-    // The model.sdf on disk is a template: the MulticopterVelocityControl
-    // plugin requires a non-empty <robotNamespace>, and that namespace must
-    // be unique per drone (it becomes the literal topic prefix the plugin
-    // subscribes cmd_vel on). If every spawned drone shared the same
-    // namespace they would all listen on the same topic and steal each
-    // other's velocity commands. So for every spawn we materialize a
-    // per-drone copy of the SDF with the placeholder replaced by
-    // "/model/<drone_id>", matching what the ros_gz_bridge in
-    // entrypoint_drone.sh remaps "/<drone_id>/cmd_vel" to.
     let robot_namespace = format!("/model/{}", payload.drone_id);
 
     let sdf_template = match fs::read_to_string(&template_path) {
@@ -103,7 +196,7 @@ fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
                 "[coordinator] ERROR: Failed to read model template '{}': {}",
                 template_path, e
             );
-            return;
+            return false;
         }
     };
 
@@ -115,7 +208,7 @@ fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
             "[coordinator] ERROR: Failed to write per-drone model file '{}': {}",
             instance_path, e
         );
-        return;
+        return false;
     }
 
     let model_path = instance_path;
@@ -149,12 +242,14 @@ fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
         Ok(out) => {
             if out.status.success() {
                 println!("[coordinator] SUCCESS: Drone {} spawned in Gazebo!", payload.drone_id);
+                true
             } else {
                 let err_msg = String::from_utf8_lossy(&out.stderr);
                 println!(
                     "[coordinator] WARNING: Spawn command for {} finished with status {}: {}",
                     payload.drone_id, out.status, err_msg
                 );
+                false
             }
         }
         Err(e) => {
@@ -162,6 +257,7 @@ fn spawn_drone_in_gazebo(payload: &RegistrationPayload) {
                 "[coordinator] ERROR: Failed to invoke ros2 run ros_gz_sim create for {}: {}",
                 payload.drone_id, e
             );
+            false
         }
     }
 }

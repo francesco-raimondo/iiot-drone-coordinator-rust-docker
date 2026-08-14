@@ -18,8 +18,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN mkdir -p /coordinator /entrypoint
 
-COPY coordinator /coordinator
-COPY entrypoints/entrypoint_coordinator.sh /entrypoint/entrypoint_coordinator.sh
+COPY Implementation/coordinator /coordinator
+COPY Kani_verify /Kani_verify
+COPY Implementation/entrypoints/entrypoint_coordinator.sh /entrypoint/entrypoint_coordinator.sh
 RUN chmod +x /entrypoint/entrypoint_coordinator.sh
 
 WORKDIR /coordinator

@@ -61,8 +61,8 @@ services:
   # Coordinator: Rust swarm coordinator
   coordinator:
     build:
-      context: .
-      dockerfile: Dockerfile.coordinator
+      context: ..
+      dockerfile: Implementation/Dockerfile.coordinator
     container_name: coordinator
     hostname: coordinator
     depends_on:
