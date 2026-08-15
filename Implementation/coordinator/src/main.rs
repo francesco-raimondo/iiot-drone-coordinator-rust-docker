@@ -1,4 +1,4 @@
-use Kani_verify::{transition, DroneState, Fsm2State, SwarmEvent};
+use Kani_verify::{transition, DroneState, Fsm1State, Fsm2State, SwarmEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RegistrationPayload {
@@ -15,10 +16,18 @@ struct RegistrationPayload {
     z: f64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct HeartbeatPayload {
+    drone_id: String,
+    status: String,
+    timestamp: f64,
+}
+
 #[derive(Debug, Clone)]
 struct ManagedDrone {
     drone_id: String,
     state: DroneState,
+    last_heartbeat: Instant,
     x: f64,
     y: f64,
     z: f64,
@@ -44,17 +53,40 @@ fn main() {
     let swarm_state = Arc::new(Mutex::new(SwarmCoordinatorState::new()));
 
     // Spawn listener thread for ROS 2 topic `/swarm/register`
-    let swarm_state_clone = Arc::clone(&swarm_state);
+    let swarm_state_reg = Arc::clone(&swarm_state);
     thread::spawn(move || {
-        listen_and_spawn_drones(swarm_state_clone);
+        listen_and_spawn_drones(swarm_state_reg);
     });
 
-    println!("[coordinator] Coordinator running and listening on ROS 2 topic /swarm/register...");
+    // Spawn listener thread for ROS 2 topic `/swarm/heartbeat`
+    let swarm_state_hb = Arc::clone(&swarm_state);
+    thread::spawn(move || {
+        listen_heartbeats(swarm_state_hb);
+    });
 
-    // Main loop keeps coordinator active and performs periodic status logging & leader selection
+    println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register & /swarm/heartbeat...");
+
+    // Main loop keeps coordinator active, checks 5s heartbeat timeout (Event 3), and logs status
     loop {
-        thread::sleep(std::time::Duration::from_secs(3));
+        thread::sleep(Duration::from_secs(2));
+
         if let Ok(mut guard) = swarm_state.lock() {
+            // Check 5s timeout for active drones -> Event 3 (HeartbeatTimeout5s)
+            let mut suspected_drones = Vec::new();
+            for (id, drone) in guard.drones.iter_mut() {
+                if drone.state.s1 == Fsm1State::Active && drone.last_heartbeat.elapsed() > Duration::from_secs(5) {
+                    drone.state = transition(drone.state, SwarmEvent::HeartbeatTimeout5s);
+                    suspected_drones.push((id.clone(), drone.state));
+                }
+            }
+
+            for (id, state) in suspected_drones {
+                println!(
+                    "[coordinator] WARNING: No heartbeat from {} for >5s! Event 3 applied -> New state: ({:?}, {:?})",
+                    id, state.s1, state.s2
+                );
+            }
+
             // Check if we need to select a leader among Candidate drones
             perform_leader_selection_if_needed(&mut guard);
 
@@ -110,6 +142,50 @@ fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) {
     }
 }
 
+fn listen_heartbeats(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
+    let mut child = Command::new("ros2")
+        .args(&["topic", "echo", "/swarm/heartbeat", "std_msgs/msg/String"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Failed to execute ros2 topic echo for /swarm/heartbeat.");
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout from ros2 topic echo");
+    let reader = BufReader::new(stdout);
+
+    println!("[coordinator] ROS 2 topic listener attached to /swarm/heartbeat");
+
+    for line in reader.lines() {
+        if let Ok(line_content) = line {
+            let cleaned = line_content.trim();
+            if cleaned.starts_with("data:") {
+                let json_str = cleaned
+                    .trim_start_matches("data:")
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"');
+                let unescaped_json = json_str.replace("\\\"", "\"");
+
+                if let Ok(payload) = serde_json::from_str::<HeartbeatPayload>(&unescaped_json) {
+                    let mut guard = swarm_state.lock().unwrap();
+                    if let Some(drone) = guard.drones.get_mut(&payload.drone_id) {
+                        drone.last_heartbeat = Instant::now();
+
+                        // If drone was Suspected, apply Event 4 (HeartbeatRecovered10s)
+                        if drone.state.s1 == Fsm1State::Suspected {
+                            drone.state = transition(drone.state, SwarmEvent::HeartbeatRecovered10s);
+                            println!(
+                                "[coordinator] INFO: Heartbeat recovered for {}! Event 4 applied -> New state: ({:?}, {:?})",
+                                payload.drone_id, drone.state.s1, drone.state.s2
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     let mut child = Command::new("ros2")
         .args(&["topic", "echo", "/swarm/register", "std_msgs/msg/String"])
@@ -149,6 +225,7 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                         let new_drone = ManagedDrone {
                             drone_id: drone_id.clone(),
                             state: DroneState::new(),
+                            last_heartbeat: Instant::now(),
                             x: payload.x,
                             y: payload.y,
                             z: payload.z,
@@ -168,6 +245,7 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                                     drone.state,
                                     SwarmEvent::RegistrationSuccess { has_active_leader },
                                 );
+                                drone.last_heartbeat = Instant::now();
                                 println!(
                                     "[coordinator] Event 1 (RegistrationSuccess) applied for {}. New state: ({:?}, {:?})",
                                     drone_id, drone.state.s1, drone.state.s2
