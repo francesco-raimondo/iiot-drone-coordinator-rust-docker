@@ -415,15 +415,22 @@ fn despawn_drone_from_gazebo(drone_id: &str) {
         drone_id, world
     );
 
-    let output = Command::new("ros2")
+    let service_topic = format!("/world/{}/remove", world);
+    let req_body = format!("name: \"{}\", type: MODEL", drone_id);
+
+    let output = Command::new("gz")
         .args(&[
-            "run",
-            "ros_gz_sim",
-            "delete",
-            "-world",
-            &world,
-            "-name",
-            drone_id,
+            "service",
+            "-s",
+            &service_topic,
+            "--reqtype",
+            "gz.msgs.Entity",
+            "--reptype",
+            "gz.msgs.Boolean",
+            "--timeout",
+            "2000",
+            "--req",
+            &req_body,
         ])
         .output();
 
@@ -441,7 +448,7 @@ fn despawn_drone_from_gazebo(drone_id: &str) {
         }
         Err(e) => {
             println!(
-                "[coordinator] ERROR: Failed to invoke ros2 run ros_gz_sim delete for {}: {}",
+                "[coordinator] ERROR: Failed to invoke gz service remove for {}: {}",
                 drone_id, e
             );
         }
