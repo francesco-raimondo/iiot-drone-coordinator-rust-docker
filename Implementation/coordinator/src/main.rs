@@ -66,15 +66,22 @@ fn main() {
 
     println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register & /swarm/heartbeat...");
 
-    // Main loop keeps coordinator active, checks 5s heartbeat timeout (Event 3), and logs status
+    // Main loop keeps coordinator active, checks heartbeat timeouts (5s Event 3, 10s Event 5), and logs status
     loop {
         thread::sleep(Duration::from_secs(2));
 
         if let Ok(mut guard) = swarm_state.lock() {
-            // Check 5s timeout for active drones -> Event 3 (HeartbeatTimeout5s)
             let mut suspected_drones = Vec::new();
+            let mut failed_drones = Vec::new();
+
             for (id, drone) in guard.drones.iter_mut() {
-                if drone.state.s1 == Fsm1State::Active && drone.last_heartbeat.elapsed() > Duration::from_secs(5) {
+                // Event 5: Timeout > 10s from Suspected -> Failed
+                if drone.state.s1 == Fsm1State::Suspected && drone.last_heartbeat.elapsed() > Duration::from_secs(10) {
+                    drone.state = transition(drone.state, SwarmEvent::DroneFailed);
+                    failed_drones.push((id.clone(), drone.state));
+                }
+                // Event 3: Timeout > 5s from Active -> Suspected
+                else if drone.state.s1 == Fsm1State::Active && drone.last_heartbeat.elapsed() > Duration::from_secs(5) {
                     drone.state = transition(drone.state, SwarmEvent::HeartbeatTimeout5s);
                     suspected_drones.push((id.clone(), drone.state));
                 }
@@ -85,6 +92,26 @@ fn main() {
                     "[coordinator] WARNING: No heartbeat from {} for >5s! Event 3 applied -> New state: ({:?}, {:?})",
                     id, state.s1, state.s2
                 );
+            }
+
+            let mut leader_failed = false;
+            for (id, state) in failed_drones {
+                println!(
+                    "[coordinator] CRITICAL: No heartbeat from {} for >10s! Event 5 (DroneFailed) applied -> New state: ({:?}, {:?})",
+                    id, state.s1, state.s2
+                );
+
+                // Despawn failed drone from Gazebo
+                despawn_drone_from_gazebo(&id);
+
+                if guard.current_leader_id.as_deref() == Some(&id) {
+                    leader_failed = true;
+                }
+            }
+
+            // Handle Leader failure & re-election trigger if current leader failed
+            if leader_failed {
+                handle_leader_failure(&mut guard);
             }
 
             // Check if we need to select a leader among Candidate drones
@@ -102,6 +129,26 @@ fn main() {
                 guard.current_leader_id,
                 drone_summary.join(", ")
             );
+        }
+    }
+}
+
+fn handle_leader_failure(state: &mut SwarmCoordinatorState) {
+    if let Some(old_leader_id) = state.current_leader_id.take() {
+        println!(
+            "[coordinator] LEADER FAILURE DETECTED: Leader {} failed! Triggering reelection among active followers...",
+            old_leader_id
+        );
+
+        // Apply LeaderFailedReelectionTrigger to all active/suspected Followers
+        for (id, drone) in state.drones.iter_mut() {
+            if drone.state.s2 == Fsm2State::Follower {
+                drone.state = transition(drone.state, SwarmEvent::LeaderFailedReelectionTrigger);
+                println!(
+                    "[coordinator] Reelection trigger applied to {}. New state: ({:?}, {:?})",
+                    id, drone.state.s1, drone.state.s2
+                );
+            }
         }
     }
 }
@@ -131,7 +178,6 @@ fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) {
             // Apply Event 2 (LeaderSelection) for all candidates
             for (id, drone) in state.drones.iter_mut() {
                 if drone.state.s2 == Fsm2State::Candidate {
-                    // for all drones checks wether the id is equal to the chosen leader id and applies the transition
                     let is_chosen = id == &chosen_leader_id;
                     drone.state = transition(drone.state, SwarmEvent::LeaderSelection { is_chosen });
                 }
@@ -215,22 +261,42 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                     let drone_id = payload.drone_id.clone();
                     let mut guard = swarm_state.lock().unwrap();
 
-                    if !guard.drones.contains_key(&drone_id) {
-                        println!(
-                            "[coordinator] New drone detected: {} at ({}, {}, {}). Initial state: (Unregistered, None)",
-                            drone_id, payload.x, payload.y, payload.z
-                        );
+                    // Check if drone is completely new OR if it is a Repaired drone in Failed state
+                    let is_new = !guard.drones.contains_key(&drone_id);
+                    let is_failed = guard
+                        .drones
+                        .get(&drone_id)
+                        .map(|d| d.state.s1 == Fsm1State::Failed)
+                        .unwrap_or(false);
 
-                        // Initial state: (Unregistered, None)
-                        let new_drone = ManagedDrone {
-                            drone_id: drone_id.clone(),
-                            state: DroneState::new(),
-                            last_heartbeat: Instant::now(),
-                            x: payload.x,
-                            y: payload.y,
-                            z: payload.z,
-                        };
-                        guard.drones.insert(drone_id.clone(), new_drone);
+                    if is_new || is_failed {
+                        if is_failed {
+                            if let Some(drone) = guard.drones.get_mut(&drone_id) {
+                                // Event 6: RepairCompleted (Failed -> Unregistered)
+                                drone.state = transition(drone.state, SwarmEvent::RepairCompleted);
+                                drone.last_heartbeat = Instant::now();
+                                println!(
+                                    "[coordinator] Event 6 (RepairCompleted) applied for {}. New state: ({:?}, {:?})",
+                                    drone_id, drone.state.s1, drone.state.s2
+                                );
+                            }
+                        } else {
+                            println!(
+                                "[coordinator] New drone detected: {} at ({}, {}, {}). Initial state: (Unregistered, None)",
+                                drone_id, payload.x, payload.y, payload.z
+                            );
+
+                            let new_drone = ManagedDrone {
+                                drone_id: drone_id.clone(),
+                                state: DroneState::new(),
+                                last_heartbeat: Instant::now(),
+                                x: payload.x,
+                                y: payload.y,
+                                z: payload.z,
+                            };
+                            guard.drones.insert(drone_id.clone(), new_drone);
+                        }
+
                         let has_active_leader = guard.current_leader_id.is_some();
                         drop(guard);
 
@@ -337,6 +403,47 @@ fn spawn_drone_in_gazebo(payload: &RegistrationPayload) -> bool {
                 payload.drone_id, e
             );
             false
+        }
+    }
+}
+
+fn despawn_drone_from_gazebo(drone_id: &str) {
+    let world = std::env::var("WORLD_NAME").unwrap_or_else(|_| "empty".to_string());
+
+    println!(
+        "[coordinator] Executing Gazebo despawn for failed drone {} in world '{}'...",
+        drone_id, world
+    );
+
+    let output = Command::new("ros2")
+        .args(&[
+            "run",
+            "ros_gz_sim",
+            "delete",
+            "-world",
+            &world,
+            "-name",
+            drone_id,
+        ])
+        .output();
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                println!("[coordinator] SUCCESS: Drone {} despawned from Gazebo!", drone_id);
+            } else {
+                let err_msg = String::from_utf8_lossy(&out.stderr);
+                println!(
+                    "[coordinator] WARNING: Despawn command for {} finished with status {}: {}",
+                    drone_id, out.status, err_msg
+                );
+            }
+        }
+        Err(e) => {
+            println!(
+                "[coordinator] ERROR: Failed to invoke ros2 run ros_gz_sim delete for {}: {}",
+                drone_id, e
+            );
         }
     }
 }
