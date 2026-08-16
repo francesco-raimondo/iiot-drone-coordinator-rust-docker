@@ -347,6 +347,78 @@ Se ti piace questo schema, preparo l'Implementation Plan in italiano per support
 
 
 [QUESTION 34]
+ok, ora il mio obiettivo è, tramite comando da terminale, far volare un drone e farlo arrivare a delle coordinate x,y,z specifiche e una volta che arriva rimane lì, poi se rimando questo comando con nuove coordinate questo riparte. Qual è il modo migliore per farlo?
+
+Tieni conto che per ora io riesco a far volare i droni solo in questi 3 modi:
+
+1) da container gazebo:
+
+docker exec -it gazebo bash -c "export GZ_PARTITION=swarm && source /opt/ros/jazzy/setup.bash && gz topic -t /model/drone_1/cmd_vel -m gz.msgs.Twist -p 'linear: {z: 1.0}'"
+
+
+2) da container del drone stesso:
+
+docker exec -it implementation-drone-3 bash -c "export ROS_DISCOVERY_SERVER=172.28.0.10:11811 && source /opt/ros/jazzy/setup.bash && ros2 topic pub --once /drone_3/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 1.0, y: 1.0, z: 0.0}}'"
+
+
+3) dal coordinator:
+
+docker exec -it coordinator bash -c "export RMW_IMPLEMENTATION=rmw_fastrtps_cpp && export ROS_DISCOVERY_SERVER=172.28.0.10:11811 && source /opt/ros/jazzy/setup.bash && ros2 topic pub /drone_1/cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.0, y: 0.0, z: 1.0}}' --once"
+
+
+
+i comandi funzionano, tuttavia c'è un problema, in questo modo il drone in questione vola all'infinito, io vorrei invece inviargli nel comando una posizione target e fare in modo che poi ci arrivi e rimanga lì fermo in attesa di ordini. Come si può fare? analizza bene [main.rs](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/coordinator/src/main.rs) [drone_agent_wrapper.py](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/drone_agent/drone_agent_wrapper.py) e [model.sdf](file;file:///home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Implementation/models/x3_uav/model.sdf) 
+
+
+per cui mi stavo chiedendo, forse conviene cambiare il plugin della fisica che sto usando per ora?
 
 
 [ANSWER 34]
+Analizziamo prima perché i comandi inviati finora fanno volare il drone all'infinito e se serve o meno cambiare il plugin fisico in Gazebo.
+
+1. Analisi del problema attuale: Perché volano all'infinito?
+Come funziona il topic /cmd_vel (Twist):
+
+/cmd_vel accetta valori di Velocità (es. linear: {z: 1.0} significa "vola verso l'alto a 1 m/s").
+Quando pubblichi --once su /cmd_vel, invii l'ordine di impostare la velocità a 1 m/s.
+Il plugin MulticopterVelocityControl di Gazebo mantiene l'ultima velocità ricevuta finché non riceve un nuovo comando che gli dice di fermarsi (linear: {x: 0, y: 0, z: 0}). Per questo motivo, se dai un impulso di velocità, il drone continua a volare all'infinito in quella direzione!
+Serve cambiare il plugin della fisica in Gazebo?
+
+NO, il plugin MulticopterVelocityControl e MulticopterMotorModel in model.sdf va benissimo! È il plugin standard ufficiale di Gazebo Harmonic per i multicotteri.
+Il problema non è il plugin di Gazebo, ma la logica di controllo di livello superiore: il topic /cmd_vel è un controllo in velocità, mentre tu vuoi un controllo in posizione target (x, y, z).
+2. Come si risolve in modo elegante e pulito (Ciclo di Controllo PID / P)
+Per fare in modo che inviando una posizione target (target_x, target_y, target_z) il drone ci vada e si fermi da solo lì, occorre implementare un ciclo di controllo continuo nel nodo Python di ogni drone (drone_agent_wrapper.py):
+
+Leggere la posizione attuale (Odometria / Pose):
+
+Gazebo pubblica la posizione reale del drone su un topic (es. /model/drone_1/pose o /drone_1/odometry tramite ros_gz_bridge).
+Il wrapper Python legge la posizione corrente (current_x, current_y, current_z).
+Calcolare l'errore e la velocità richiesta (Controllo P):
+
+Ad ogni ciclo (es. a 20Hz o 10Hz): $$\text{error_x} = \text{target_x} - \text{current_x}$$ $$\text{error_y} = \text{target_y} - \text{current_y}$$ $$\text{error_z} = \text{target_z} - \text{current_z}$$
+Se la distanza dal target è maggiore di una tolleranza (es. $0.05\text{ m}$): $$\text{cmd_vel.linear.x} = K_p \times \text{error_x}$$ $$\text{cmd_vel.linear.y} = K_p \times \text{error_y}$$ $$\text{cmd_vel.linear.z} = K_p \times \text{error_z}$$
+Quando la distanza è minore della tolleranza (è arrivato): $$\text{cmd_vel} = 0$$ Il nodo invia velocità zero ed il drone rimane perfettamente fermo in hovering.
+3. Architettura dell'interfaccia a comandi desiderata
+Potrai inviare comandi in due modi:
+
+Modo A: Da Coordinatore / ROS 2 (Consigliato per l'architettura di progetto)
+Inviare un messaggio JSON su un topic ROS 2 /swarm/goto (o direttamente su un topic specifico del drone):
+
+bash
+docker exec -it coordinator bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic pub --once /swarm/goto std_msgs/msg/String \"data: '{\\\"drone_id\\\": \\\"drone_1\\\", \\\"x\\\": 2.0, \\\"y\\\": 3.0, \\\"z\\\": 5.0}'\""
+Modo B: Da singolo container drone
+Il wrapper riceve la nuova destinazione, aggiorna le coordinate target interne e il ciclo di controllo guida automaticamente il drone nella nuova posizione e lo mantiene fermo!
+
+Ti piacerebbe procedere con l'implementazione di questa soluzione?
+Possiamo aggiornare:
+
+entrypoint_drone.sh: Aggiungere il bridge per il topic della posa odometrica (/model/drone_N/pose $\rightarrow$ ROS 2).
+drone_agent_wrapper.py: Aggiungere la sottoscrizione al topic del target goto, la lettura dell'odometria e il ciclo PID/Proporzionale a 20Hz che calcola ed emette /cmd_vel fino all'arrivo e poi azzera la velocità.
+
+
+
+
+[QUESTION 35]
+
+
+[ANSWER 35]
