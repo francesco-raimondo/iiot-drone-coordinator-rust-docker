@@ -23,6 +23,14 @@ struct HeartbeatPayload {
     timestamp: f64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct SwarmGotoPayload {
+    drone_id: String,
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
 #[derive(Debug, Clone)]
 struct ManagedDrone {
     drone_id: String,
@@ -31,6 +39,7 @@ struct ManagedDrone {
     x: f64,
     y: f64,
     z: f64,
+    target_position: Option<(f64, f64, f64)>,
 }
 
 struct SwarmCoordinatorState {
@@ -64,7 +73,13 @@ fn main() {
         listen_heartbeats(swarm_state_hb);
     });
 
-    println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register & /swarm/heartbeat...");
+    // Spawn listener thread for ROS 2 topic `/swarm/goto`
+    let swarm_state_goto = Arc::clone(&swarm_state);
+    thread::spawn(move || {
+        listen_swarm_goto(swarm_state_goto);
+    });
+
+    println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register, /swarm/heartbeat & /swarm/goto...");
 
     // Main loop keeps coordinator active, checks heartbeat timeouts (5s Event 3, 10s Event 5), and logs status
     loop {
@@ -232,6 +247,83 @@ fn listen_heartbeats(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     }
 }
 
+fn listen_swarm_goto(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
+    let mut child = Command::new("ros2")
+        .args(&["topic", "echo", "/swarm/goto", "std_msgs/msg/String"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Failed to execute ros2 topic echo for /swarm/goto.");
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout from ros2 topic echo");
+    let reader = BufReader::new(stdout);
+
+    println!("[coordinator] ROS 2 topic listener attached to /swarm/goto");
+
+    for line in reader.lines() {
+        if let Ok(line_content) = line {
+            let cleaned = line_content.trim();
+            if cleaned.starts_with("data:") {
+                let json_str = cleaned
+                    .trim_start_matches("data:")
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"');
+                let unescaped_json = json_str.replace("\\\"", "\"");
+
+                if let Ok(payload) = serde_json::from_str::<SwarmGotoPayload>(&unescaped_json) {
+                    let mut guard = swarm_state.lock().unwrap();
+                    if let Some(drone) = guard.drones.get_mut(&payload.drone_id) {
+                        drone.target_position = Some((payload.x, payload.y, payload.z));
+                        println!(
+                            "[coordinator] Recorded target_position for {}: ({}, {}, {})",
+                            payload.drone_id, payload.x, payload.y, payload.z
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn send_swarm_goto(drone_id: &str, x: f64, y: f64, z: f64) {
+    let raw_payload = format!("{{\\\"drone_id\\\": \\\"{}\\\", \\\"x\\\": {}, \\\"y\\\": {}, \\\"z\\\": {}}}", drone_id, x, y, z);
+    let data_arg = format!("data: '{}'", raw_payload);
+    let output = Command::new("ros2")
+        .args(&[
+            "topic",
+            "pub",
+            "--once",
+            "/swarm/goto",
+            "std_msgs/msg/String",
+            &data_arg,
+        ])
+        .output();
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                println!(
+                    "[coordinator] RESILIENCE SUCCESS: Resent goto target ({}, {}, {}) to {}",
+                    x, y, z, drone_id
+                );
+            } else {
+                let err_msg = String::from_utf8_lossy(&out.stderr);
+                println!(
+                    "[coordinator] WARNING: Resend goto for {} finished with status {}: {}",
+                    drone_id, out.status, err_msg
+                );
+            }
+        }
+        Err(e) => {
+            println!(
+                "[coordinator] ERROR: Failed to invoke ros2 topic pub for {}: {}",
+                drone_id, e
+            );
+        }
+    }
+}
+
 fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     let mut child = Command::new("ros2")
         .args(&["topic", "echo", "/swarm/register", "std_msgs/msg/String"])
@@ -293,6 +385,7 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                                 x: payload.x,
                                 y: payload.y,
                                 z: payload.z,
+                                target_position: None,
                             };
                             guard.drones.insert(drone_id.clone(), new_drone);
                         }
@@ -319,6 +412,17 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                             }
                             // Trigger leader selection immediately if appropriate
                             perform_leader_selection_if_needed(&mut guard);
+
+                            let saved_target = guard.drones.get(&drone_id).and_then(|d| d.target_position);
+                            drop(guard);
+
+                            if let Some((tx, ty, tz)) = saved_target {
+                                println!(
+                                    "[coordinator] RESILIENCE: Drone {} recovered! Re-sending target position ({}, {}, {})...",
+                                    drone_id, tx, ty, tz
+                                );
+                                send_swarm_goto(&drone_id, tx, ty, tz);
+                            }
                         }
                     }
                 }
