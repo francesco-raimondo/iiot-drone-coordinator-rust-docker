@@ -21,6 +21,9 @@ struct HeartbeatPayload {
     drone_id: String,
     status: String,
     timestamp: f64,
+    x: Option<f64>,
+    y: Option<f64>,
+    z: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,6 +32,11 @@ struct SwarmGotoPayload {
     x: f64,
     y: f64,
     z: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SwarmFormationPayload {
+    formation: String,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +53,8 @@ struct ManagedDrone {
 struct SwarmCoordinatorState {
     drones: HashMap<String, ManagedDrone>,
     current_leader_id: Option<String>,
+    formation: Option<String>,
+    formation_positions: HashMap<String, (f64, f64, f64)>,
 }
 
 impl SwarmCoordinatorState {
@@ -52,6 +62,8 @@ impl SwarmCoordinatorState {
         SwarmCoordinatorState {
             drones: HashMap::new(),
             current_leader_id: None,
+            formation: None,
+            formation_positions: HashMap::new(),
         }
     }
 }
@@ -79,7 +91,13 @@ fn main() {
         listen_swarm_goto(swarm_state_goto);
     });
 
-    println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register, /swarm/heartbeat & /swarm/goto...");
+    // Spawn listener thread for ROS 2 topic `/swarm/formation`
+    let swarm_state_form = Arc::clone(&swarm_state);
+    thread::spawn(move || {
+        listen_swarm_formation(swarm_state_form);
+    });
+
+    println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register, /swarm/heartbeat, /swarm/goto & /swarm/formation...");
 
     // Main loop keeps coordinator active, checks heartbeat timeouts (5s Event 3, 10s Event 5), and logs status
     loop {
@@ -231,6 +249,9 @@ fn listen_heartbeats(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                     let mut guard = swarm_state.lock().unwrap();
                     if let Some(drone) = guard.drones.get_mut(&payload.drone_id) {
                         drone.last_heartbeat = Instant::now();
+                        if let Some(x) = payload.x { drone.x = x; }
+                        if let Some(y) = payload.y { drone.y = y; }
+                        if let Some(z) = payload.z { drone.z = z; }
 
                         // If drone was Suspected, apply Event 4 (HeartbeatRecovered10s)
                         if drone.state.s1 == Fsm1State::Suspected {
@@ -244,6 +265,116 @@ fn listen_heartbeats(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                 }
             }
         }
+    }
+}
+
+fn listen_swarm_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
+    let mut child = Command::new("ros2")
+        .args(&["topic", "echo", "/swarm/formation", "std_msgs/msg/String"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Failed to execute ros2 topic echo for /swarm/formation.");
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout from ros2 topic echo");
+    let reader = BufReader::new(stdout);
+
+    println!("[coordinator] ROS 2 topic listener attached to /swarm/formation");
+
+    for line in reader.lines() {
+        if let Ok(line_content) = line {
+            let cleaned = line_content.trim();
+            if cleaned.starts_with("data:") {
+                let json_str = cleaned
+                    .trim_start_matches("data:")
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"');
+                let unescaped_json = json_str.replace("\\\"", "\"");
+
+                if let Ok(payload) = serde_json::from_str::<SwarmFormationPayload>(&unescaped_json) {
+                    if payload.formation.to_lowercase() == "line" {
+                        trigger_line_formation(Arc::clone(&swarm_state));
+                    } else {
+                        println!("[coordinator] Unknown formation requested: {}", payload.formation);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
+    let mut guard = swarm_state.lock().unwrap();
+
+    let leader_id = match &guard.current_leader_id {
+        Some(id) => id.clone(),
+        None => {
+            println!("[coordinator] WARNING: Cannot trigger line formation: No active leader elected!");
+            return;
+        }
+    };
+
+    let (leader_x, leader_y) = match guard.drones.get(&leader_id) {
+        Some(leader_drone) => (leader_drone.x, leader_drone.y),
+        None => {
+            println!("[coordinator] WARNING: Leader {} not found in managed drones!", leader_id);
+            return;
+        }
+    };
+
+    let formation_z = 4.0;
+    let safety_distance = 1.5;
+
+    // Collect active follower IDs (sorted deterministically)
+    let mut follower_ids: Vec<String> = guard
+        .drones
+        .iter()
+        .filter(|(id, drone)| *id != &leader_id && drone.state.s1 == Fsm1State::Active)
+        .map(|(id, _)| id.clone())
+        .collect();
+    follower_ids.sort();
+
+    println!(
+        "[coordinator] FORMATION: Triggering LINE formation around Leader {} at ({:.2}, {:.2}) with {} active followers...",
+        leader_id, leader_x, leader_y, follower_ids.len()
+    );
+
+    let mut new_commands = Vec::new();
+
+    // 1. Leader target position: (leader_x, leader_y, formation_z)
+    let leader_target = (leader_x, leader_y, formation_z);
+    if let Some(leader_drone) = guard.drones.get_mut(&leader_id) {
+        leader_drone.target_position = Some(leader_target);
+    }
+    guard.formation_positions.insert(leader_id.clone(), leader_target);
+    new_commands.push((leader_id.clone(), leader_target));
+
+    // 2. Calculate symmetric Y positions for followers around leader
+    for (idx, follower_id) in follower_ids.iter().enumerate() {
+        let pair_index = ((idx / 2) + 1) as f64;
+        let sign = if idx % 2 == 0 { -1.0 } else { 1.0 };
+        let offset_y = sign * pair_index * safety_distance;
+        let follower_target = (leader_x, leader_y + offset_y, formation_z);
+
+        if let Some(follower_drone) = guard.drones.get_mut(follower_id) {
+            follower_drone.target_position = Some(follower_target);
+        }
+        guard.formation_positions.insert(follower_id.clone(), follower_target);
+        new_commands.push((follower_id.clone(), follower_target));
+    }
+
+    guard.formation = Some("line".to_string());
+    drop(guard);
+
+    // 3. Issue ros2 topic pub /swarm/goto commands for all drones in formation
+    for (drone_id, (tx, ty, tz)) in new_commands {
+        println!(
+            "[coordinator] FORMATION LINE: Assigning target ({:.2}, {:.2}, {:.2}) to {}",
+            tx, ty, tz, drone_id
+        );
+        send_swarm_goto(&drone_id, tx, ty, tz);
+        thread::sleep(Duration::from_millis(400));
     }
 }
 
@@ -287,13 +418,14 @@ fn listen_swarm_goto(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
 }
 
 fn send_swarm_goto(drone_id: &str, x: f64, y: f64, z: f64) {
-    let raw_payload = format!("{{\\\"drone_id\\\": \\\"{}\\\", \\\"x\\\": {}, \\\"y\\\": {}, \\\"z\\\": {}}}", drone_id, x, y, z);
-    let data_arg = format!("data: '{}'", raw_payload);
+    let json_str = format!(r#"{{"drone_id": "{}", "x": {}, "y": {}, "z": {}}}"#, drone_id, x, y, z);
+    let data_arg = format!("data: '{}'", json_str);
     let output = Command::new("ros2")
         .args(&[
             "topic",
             "pub",
-            "--once",
+            "-t",
+            "3",
             "/swarm/goto",
             "std_msgs/msg/String",
             &data_arg,

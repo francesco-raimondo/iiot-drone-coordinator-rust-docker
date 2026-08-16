@@ -419,6 +419,58 @@ drone_agent_wrapper.py: Aggiungere la sottoscrizione al topic del target goto, l
 
 
 [QUESTION 35]
+Visto che funziona il metodo di volo (e voglio mantenere come metodo per far volare i droni il comando che parte dal coordinator), adesso possiamo andare avanti. In particolare devo implementare la logica di resilienza, mi spiego meglio:
+
+CASO 1: 
+Supponiamo che io dia il comando a un drone di andare a una posizione target (target_pos), il drone ci arriva e rimane fermo lì in attesa di ordini. A questo punto io chiamo il comando "docker pause" e stoppo il drone, il drone dopo 10 secondi andrà in fallimento. Dopo chiamo il comando "docker unpause" e il drone si ripare, si riregistra e torna a essere "Active". tuttavia verrà spawnato nel suo punto iniziale di spawn, non nella sua ultima posizione, cioè quella che aveva raggiunto. Quindi pensavo di aggiungere all struct
+
+main.rs#L26-34
+ un nuovo attributo chiamato "target_position", che contiene la posizione target che gli era stato ordinato di raggiungere. Quindi si deve implementare un meccanismo per cui, quando il drone si ripara e respawna, si controlla se c'è qualcosa nell'attributo "target_position", se non c'è nulla allora semplicemente il drone non aveva ricevuto nessun ordine, e spawnarà nel suo solito punto di spawn iniziale. Se invece c'è qualcosa, allora significa che il drone deve raggiungere quella target_position. Quindi DOPO che il coordinatore invia il comando di spawn del drone, invierà anche il comando per far arrivare il drone alla target_position. In questo modo abbiamo già una buona base per implementare la resilienza.
+
+
+Chiaramente tutta la logica attuale del coordinator che stampa i log dello swarm status e i droni che inviano gli heartbeat deve rimanere così com'è. Concentrati solo su ciò che ti ho descritto facendo attenzioni a possibili problemi di compatibilità delle varie parti del codice.
 
 
 [ANSWER 35]
+La logica di resilienza della posizione target nel coordinatore Rust è stata implementata e compilata con successo!
+
+È disponibile il documento di walkthrough completo: 
+walkthrough.md
+.
+
+Summary delle Modifiche Implementate
+ManagedDrone Struct:
+
+Aggiunto il campo target_position: Option<(f64, f64, f64)> per tracciare la destinazione assegnata a ciascun drone.
+Listener /swarm/goto:
+
+Inserito il thread listen_swarm_goto che intercetta i comandi inviati sul topic /swarm/goto e registra in tempo reale la target_position del drone.
+Re-invio Automatico del Target post-Ripristino:
+
+In listen_and_spawn_drones, dopo aver eseguito lo spawn di un drone ripristinato (dopo docker unpause / RepairCompleted), il coordinatore verifica se è presente una target_position. Se presente, invia automaticamente il comando ROS 2 su /swarm/goto per far volare nuovamente il drone verso le sue coordinate target.
+Puoi eseguire la verifica manuale seguendo i comandi descritti nel 
+walkthrough.md
+
+
+
+
+
+[QUESTION 36]
+
+
+
+[ANSWER 36]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
