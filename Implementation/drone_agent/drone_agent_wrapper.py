@@ -80,6 +80,7 @@ class DroneAgentWrapper(Node):
         # Peer drone tracking for 3D Artificial Potential Fields (APF) Obstacle Avoidance
         self.peer_positions = {}
         self.peer_subs = []
+        self.fresh_target_received = False
         for i in range(1, 11):
             peer_id = f"drone_{i}"
             if peer_id != self.drone_id:
@@ -131,6 +132,7 @@ class DroneAgentWrapper(Node):
                 x = float(payload.get("x", self.target_x))
                 y = float(payload.get("y", self.target_y))
                 z = float(payload.get("z", self.target_z))
+                self.fresh_target_received = True
                 self.set_target(x, y, z)
         except Exception as e:
             self.get_logger().error(f"[{self.drone_id}] Failed to parse swarm goto payload: {e}")
@@ -145,6 +147,24 @@ class DroneAgentWrapper(Node):
             f"[{self.drone_id}] NEW TARGET RECEIVED: ({self.target_x:.2f}, {self.target_y:.2f}, {self.target_z:.2f})"
         )
 
+    def publish_registration(self):
+        """Sends registration payload to the Rust coordinator and resets target if on ground."""
+        payload = {
+            "drone_id": self.drone_id,
+            "x": self.spawn_x,
+            "y": self.spawn_y,
+            "z": self.spawn_z,
+        }
+        # If drone is at ground level, ensure target is locked to ground until coordinator assigns a new target
+        if self.current_z < 1.0 and not self.fresh_target_received:
+            self.target_x = self.spawn_x
+            self.target_y = self.spawn_y
+            self.target_z = self.spawn_z
+
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.registration_pub.publish(msg)
+
     def control_loop(self):
         """P-Controller loop with APF 3D Obstacle Avoidance executed at 20 Hz.
 
@@ -153,6 +173,15 @@ class DroneAgentWrapper(Node):
         publishes zero velocity to hover steadily at target coordinates.
         """
         if not self.has_odometry:
+            return
+
+        # If drone is at ground level and hasn't received a fresh formation target from coordinator, stay at ground
+        if self.current_z < 1.0 and not self.fresh_target_received:
+            cmd = Twist()
+            cmd.linear.x = 0.0
+            cmd.linear.y = 0.0
+            cmd.linear.z = 0.0
+            self.cmd_vel_pub.publish(cmd)
             return
 
         dx = self.target_x - self.current_x

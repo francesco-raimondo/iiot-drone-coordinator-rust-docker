@@ -461,6 +461,13 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     guard.formation = Some("line".to_string());
     drop(guard);
 
+    // Sort commands so that ground/repaired drones taking off receive their outer target FIRST
+    new_commands.sort_by(|a, b| {
+        let is_a_ground = (a.1 .2 - 1.5).abs() < 0.1;
+        let is_b_ground = (b.1 .2 - 1.5).abs() < 0.1;
+        is_b_ground.cmp(&is_a_ground)
+    });
+
     // 3. Issue ros2 topic pub /swarm/goto commands for all drones in formation
     for (drone_id, (tx, ty, tz)) in new_commands {
         println!(
