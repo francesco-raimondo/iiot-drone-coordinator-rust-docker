@@ -389,21 +389,73 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     }
     target_y_list.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    // 3. Match i-th follower with i-th target Y, using Altitude Layering during transit (Z=4.0 vs Z=4.8)
-    for (idx, (follower_id, curr_y)) in followers.iter().enumerate() {
-        let target_y = target_y_list[idx];
+    // 3. Separate airborne followers with saved targets and unassigned ground followers
+    let mut final_assignments: Vec<(String, f64, bool)> = Vec::new();
+    let mut occupied_y_slots: Vec<f64> = Vec::new();
+    let mut airborne_with_target: Vec<(String, f64)> = Vec::new();
+    let mut unassigned_ground: Vec<String> = Vec::new();
+
+    for (fid, _y) in followers.iter() {
+        if let Some(drone) = guard.drones.get(fid) {
+            if drone.z > 2.0 && drone.target_position.is_some() {
+                let saved_y = drone.target_position.unwrap().1;
+                airborne_with_target.push((fid.clone(), saved_y));
+                occupied_y_slots.push(saved_y);
+            } else {
+                unassigned_ground.push(fid.clone());
+            }
+        }
+    }
+
+    if !unassigned_ground.is_empty() && !airborne_with_target.is_empty() {
+        // Airborne followers keep their exact saved target positions (NO movement for hovering drones)
+        for (fid, saved_y) in airborne_with_target {
+            final_assignments.push((fid, saved_y, false));
+        }
+
+        // Find missing slots in target_y_list not occupied by airborne followers
+        let mut missing_slots: Vec<f64> = Vec::new();
+        for &ty in &target_y_list {
+            let is_occupied = occupied_y_slots.iter().any(|&oy| (oy - ty).abs() < 0.1);
+            if !is_occupied {
+                missing_slots.push(ty);
+            }
+        }
+        missing_slots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Assign missing outer slot to repaired ground drone(s)
+        for (i, fid) in unassigned_ground.iter().enumerate() {
+            let slot = if i < missing_slots.len() { missing_slots[i] } else { target_y_list[0] };
+            final_assignments.push((fid.clone(), slot, true));
+        }
+    } else {
+        for (idx, (follower_id, _curr_y)) in followers.iter().enumerate() {
+            let is_g = guard.drones.get(follower_id).map_or(false, |d| d.z <= 2.0);
+            final_assignments.push((follower_id.clone(), target_y_list[idx], is_g));
+        }
+    }
+
+    // 4. Send goto commands to all followers
+    for (follower_id, target_y, is_ground) in final_assignments {
         let saved_follower_target = (center_x, target_y, formation_z);
 
-        // Apply Transit Altitude Layering: if drone moves > 1.0m or odd index, fly at 4.8m layer
+        // Ground/repaired drones fly at low transit altitude 1.5m to avoid hovering drones
+        let curr_y = guard.drones.get(&follower_id).map_or(0.0, |d| d.y);
         let dist_y = (curr_y - target_y).abs();
-        let flight_z = if dist_y > 1.0 || idx % 2 == 1 { 4.8 } else { 4.0 };
+        let flight_z = if is_ground {
+            1.5
+        } else if dist_y > 1.0 {
+            4.8
+        } else {
+            4.0
+        };
         let flight_target = (center_x, target_y, flight_z);
 
-        if let Some(follower_drone) = guard.drones.get_mut(follower_id) {
+        if let Some(follower_drone) = guard.drones.get_mut(&follower_id) {
             follower_drone.target_position = Some(saved_follower_target);
         }
         guard.formation_positions.insert(follower_id.clone(), saved_follower_target);
-        new_commands.push((follower_id.clone(), flight_target));
+        new_commands.push((follower_id, flight_target));
     }
 
     guard.formation = Some("line".to_string());
@@ -541,9 +593,13 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                                 // Event 6: RepairCompleted (Failed -> Unregistered)
                                 drone.state = transition(drone.state, SwarmEvent::RepairCompleted);
                                 drone.last_heartbeat = Instant::now();
+                                drone.x = payload.x;
+                                drone.y = payload.y;
+                                drone.z = payload.z;
+                                drone.target_position = None;
                                 println!(
-                                    "[coordinator] Event 6 (RepairCompleted) applied for {}. New state: ({:?}, {:?})",
-                                    drone_id, drone.state.s1, drone.state.s2
+                                    "[coordinator] Event 6 (RepairCompleted) applied for {}. Reset position to ground ({}, {}, {}). New state: ({:?}, {:?})",
+                                    drone_id, payload.x, payload.y, payload.z, drone.state.s1, drone.state.s2
                                 );
                             }
                         } else {

@@ -171,6 +171,16 @@ class DroneAgentWrapper(Node):
             dz = self.target_z - self.current_z
             distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
+        # Low-altitude departure check for ground takeoff: ascend to 4.0m once outer slot is reached
+        if 1.0 < self.target_z < 2.5 and horizontal_dist < 0.30:
+            self.target_z = 4.0
+            self.target_reached_logged = False
+            self.get_logger().info(
+                f"[{self.drone_id}] OUTER SLOT REACHED: Ascending from low transit altitude ({self.current_z:.2f}m) to final hover altitude (4.00m)"
+            )
+            dz = self.target_z - self.current_z
+            distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+
         cmd = Twist()
 
         if distance > self.position_tolerance:
