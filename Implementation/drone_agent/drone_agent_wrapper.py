@@ -77,15 +77,40 @@ class DroneAgentWrapper(Node):
             qos_profile
         )
 
+        # Peer drone tracking for 3D Artificial Potential Fields (APF) Obstacle Avoidance
+        self.peer_positions = {}
+        self.peer_subs = []
+        for i in range(1, 11):
+            peer_id = f"drone_{i}"
+            if peer_id != self.drone_id:
+                sub = self.create_subscription(
+                    Odometry,
+                    f"/{peer_id}/odometry",
+                    self.make_peer_callback(peer_id),
+                    10
+                )
+                self.peer_subs.append(sub)
+
         # Timers
         self.registration_timer = self.create_timer(2.0, self.publish_registration)
         self.heartbeat_timer = self.create_timer(1.0, self.publish_heartbeat)
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz control loop
 
         self.get_logger().info(
-            f"[{self.drone_id}] Drone ROS 2 Agent Wrapper started. "
+            f"[{self.drone_id}] Drone ROS 2 Agent Wrapper started with APF 3D Obstacle Avoidance. "
             f"Initial spawn/target position: ({self.target_x}, {self.target_y}, {self.target_z})"
         )
+
+    def make_peer_callback(self, peer_id: str):
+        """Creates callback for peer drone odometry tracking."""
+        return lambda msg: self.peer_odometry_callback(msg, peer_id)
+
+    def peer_odometry_callback(self, msg: Odometry, peer_id: str):
+        """Stores real-time 3D position of peer drones with timestamp for APF repulsion calculation."""
+        px = msg.pose.pose.position.x
+        py = msg.pose.pose.position.y
+        pz = msg.pose.pose.position.z
+        self.peer_positions[peer_id] = (px, py, pz, time.time())
 
     def odometry_callback(self, msg: Odometry):
         """Updates current position from ground-truth Gazebo odometry."""
@@ -121,11 +146,11 @@ class DroneAgentWrapper(Node):
         )
 
     def control_loop(self):
-        """P-Controller loop executed at 20 Hz.
+        """P-Controller loop with APF 3D Obstacle Avoidance executed at 20 Hz.
 
-        Calculates position error vector towards target position. If distance exceeds tolerance,
-        publishes linear velocity commands. Once within tolerance, publishes zero velocity
-        to hover steadily at target coordinates.
+        Calculates position error vector towards target position and adds repulsive velocity
+        vectors from neighboring drones within safety radius (APF). Once within tolerance,
+        publishes zero velocity to hover steadily at target coordinates.
         """
         if not self.has_odometry:
             return
@@ -135,13 +160,65 @@ class DroneAgentWrapper(Node):
         dz = self.target_z - self.current_z
         distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
+        # Altitude Layering check: If flying at layer height (target_z > 4.5) and reached horizontal target
+        horizontal_dist = math.sqrt(dx * dx + dy * dy)
+        if self.target_z > 4.5 and horizontal_dist < 0.25:
+            self.target_z = 4.0
+            self.target_reached_logged = False
+            self.get_logger().info(
+                f"[{self.drone_id}] HORIZONTAL POSITION REACHED: Descending from layer height ({self.current_z:.2f}m) to final hover altitude (4.00m)"
+            )
+            dz = self.target_z - self.current_z
+            distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+
         cmd = Twist()
 
         if distance > self.position_tolerance:
-            # Proportional velocity calculation
-            vx = self.kp_linear * dx
-            vy = self.kp_linear * dy
-            vz = self.kp_linear * dz
+            # 1. Attractive velocity vector towards target position
+            vx_att = self.kp_linear * dx
+            vy_att = self.kp_linear * dy
+            vz_att = self.kp_linear * dz
+
+            # 2. Artificial Potential Fields (APF) 3D Repulsive force from neighboring drones
+            vx_rep = 0.0
+            vy_rep = 0.0
+            vz_rep = 0.0
+
+            safety_radius = 1.2  # meters
+            k_rep = 1.8          # Repulsive force gain
+            now = time.time()
+
+            for peer_id, (px, py, pz, last_seen) in self.peer_positions.items():
+                # Ignore stale odometry (>2.0s old) from paused/failed drones
+                if now - last_seen > 2.0:
+                    continue
+
+                p_dx = self.current_x - px
+                p_dy = self.current_y - py
+                p_dz = self.current_z - pz
+                dist_xy = math.sqrt(p_dx * p_dx + p_dy * p_dy)
+                dist = math.sqrt(p_dx * p_dx + p_dy * p_dy + p_dz * p_dz)
+
+                if 0.05 < dist < safety_radius:
+                    # F_rep = k_rep * (1/dist - 1/safety_radius) / (dist^2)
+                    f_rep = k_rep * ((1.0 / dist) - (1.0 / safety_radius)) / (dist * dist)
+                    # Unit direction vector pointing away from peer
+                    ux = p_dx / dist
+                    uy = p_dy / dist
+                    uz = p_dz / dist
+
+                    vx_rep += f_rep * ux
+                    vy_rep += f_rep * uy
+
+                    # Only apply vertical repulsion if drones are horizontally very close (<0.35m)
+                    # to avoid pushing lower-layer drones downward during layered flight
+                    if dist_xy < 0.35:
+                        vz_rep += f_rep * uz
+
+            # Resultant velocity vector = Attractive + Repulsive
+            vx = vx_att + vx_rep
+            vy = vy_att + vy_rep
+            vz = vz_att + vz_rep
 
             # Clamp velocities to maximum allowable velocity limit
             speed = math.sqrt(vx * vx + vy * vy + vz * vz)

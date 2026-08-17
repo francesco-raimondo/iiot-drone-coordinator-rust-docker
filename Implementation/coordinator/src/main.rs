@@ -54,6 +54,7 @@ struct SwarmCoordinatorState {
     drones: HashMap<String, ManagedDrone>,
     current_leader_id: Option<String>,
     formation: Option<String>,
+    formation_center: Option<(f64, f64)>,
     formation_positions: HashMap<String, (f64, f64, f64)>,
 }
 
@@ -63,6 +64,7 @@ impl SwarmCoordinatorState {
             drones: HashMap::new(),
             current_leader_id: None,
             formation: None,
+            formation_center: None,
             formation_positions: HashMap::new(),
         }
     }
@@ -148,7 +150,8 @@ fn main() {
             }
 
             // Check if we need to select a leader among Candidate drones
-            perform_leader_selection_if_needed(&mut guard);
+            let new_leader_elected = perform_leader_selection_if_needed(&mut guard);
+            let active_formation = guard.formation.clone();
 
             let drone_summary: Vec<String> = guard
                 .drones
@@ -162,6 +165,16 @@ fn main() {
                 guard.current_leader_id,
                 drone_summary.join(", ")
             );
+
+            drop(guard);
+
+            if new_leader_elected && active_formation.is_some() {
+                println!(
+                    "[coordinator] AUTOMATIC RE-FORMATION: New Leader elected while active formation '{}'! Recalculating formation around new Leader...",
+                    active_formation.unwrap()
+                );
+                trigger_line_formation(Arc::clone(&swarm_state));
+            }
         }
     }
 }
@@ -186,7 +199,8 @@ fn handle_leader_failure(state: &mut SwarmCoordinatorState) {
     }
 }
 
-fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) {
+fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) -> bool {
+    let mut newly_selected = false;
     // Only perform leader selection if no active leader exists
     if state.current_leader_id.is_none() {
         let candidates: Vec<String> = state
@@ -217,8 +231,10 @@ fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) {
             }
             // sets the new leader
             state.current_leader_id = Some(chosen_leader_id);
+            newly_selected = true;
         }
     }
+    newly_selected
 }
 
 fn listen_heartbeats(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
@@ -315,53 +331,73 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
         }
     };
 
-    let (leader_x, leader_y) = match guard.drones.get(&leader_id) {
-        Some(leader_drone) => (leader_drone.x, leader_drone.y),
+    // Determine or anchor the fixed formation center (X_C, Y_C)
+    let (center_x, center_y) = match guard.formation_center {
+        Some(center) => center,
         None => {
-            println!("[coordinator] WARNING: Leader {} not found in managed drones!", leader_id);
-            return;
+            let (lx, ly) = match guard.drones.get(&leader_id) {
+                Some(leader_drone) => (leader_drone.x, leader_drone.y),
+                None => (0.0, 0.0),
+            };
+            guard.formation_center = Some((lx, ly));
+            (lx, ly)
         }
     };
 
     let formation_z = 4.0;
     let safety_distance = 1.5;
 
-    // Collect active follower IDs (sorted deterministically)
-    let mut follower_ids: Vec<String> = guard
+    // Collect active followers with their current Y coordinate: (drone_id, current_y)
+    let mut followers: Vec<(String, f64)> = guard
         .drones
         .iter()
         .filter(|(id, drone)| *id != &leader_id && drone.state.s1 == Fsm1State::Active)
-        .map(|(id, _)| id.clone())
+        .map(|(id, drone)| (id.clone(), drone.y))
         .collect();
-    follower_ids.sort();
+
+    // Sort followers by current Y coordinate in ascending order (left to right)
+    followers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     println!(
-        "[coordinator] FORMATION: Triggering LINE formation around Leader {} at ({:.2}, {:.2}) with {} active followers...",
-        leader_id, leader_x, leader_y, follower_ids.len()
+        "[coordinator] FORMATION: Triggering LINE formation anchored at ({:.2}, {:.2}) around Leader {} with {} active followers...",
+        center_x, center_y, leader_id, followers.len()
     );
 
     let mut new_commands = Vec::new();
 
-    // 1. Leader target position: (leader_x, leader_y, formation_z)
-    let leader_target = (leader_x, leader_y, formation_z);
+    // 1. Leader target position: (center_x, center_y, formation_z)
+    let leader_target = (center_x, center_y, formation_z);
     if let Some(leader_drone) = guard.drones.get_mut(&leader_id) {
         leader_drone.target_position = Some(leader_target);
     }
     guard.formation_positions.insert(leader_id.clone(), leader_target);
     new_commands.push((leader_id.clone(), leader_target));
 
-    // 2. Calculate symmetric Y positions for followers around leader
-    for (idx, follower_id) in follower_ids.iter().enumerate() {
+    // 2. Compute symmetric follower target Y offsets relative to formation center Y
+    let num_followers = followers.len();
+    let mut target_y_list: Vec<f64> = Vec::with_capacity(num_followers);
+    for idx in 0..num_followers {
         let pair_index = ((idx / 2) + 1) as f64;
         let sign = if idx % 2 == 0 { -1.0 } else { 1.0 };
         let offset_y = sign * pair_index * safety_distance;
-        let follower_target = (leader_x, leader_y + offset_y, formation_z);
+        target_y_list.push(center_y + offset_y);
+    }
+    target_y_list.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // 3. Match i-th follower with i-th target Y, using Altitude Layering during transit (Z=4.0 vs Z=4.8)
+    for (idx, (follower_id, _curr_y)) in followers.iter().enumerate() {
+        let target_y = target_y_list[idx];
+        let saved_follower_target = (center_x, target_y, formation_z);
+
+        // Apply Altitude Layering during transit: odd-indexed followers fly at 4.8m layer
+        let flight_z = if idx % 2 == 1 { 4.8 } else { 4.0 };
+        let flight_target = (center_x, target_y, flight_z);
 
         if let Some(follower_drone) = guard.drones.get_mut(follower_id) {
-            follower_drone.target_position = Some(follower_target);
+            follower_drone.target_position = Some(saved_follower_target);
         }
-        guard.formation_positions.insert(follower_id.clone(), follower_target);
-        new_commands.push((follower_id.clone(), follower_target));
+        guard.formation_positions.insert(follower_id.clone(), saved_follower_target);
+        new_commands.push((follower_id.clone(), flight_target));
     }
 
     guard.formation = Some("line".to_string());
@@ -545,10 +581,17 @@ fn listen_and_spawn_drones(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                             // Trigger leader selection immediately if appropriate
                             perform_leader_selection_if_needed(&mut guard);
 
+                            let has_active_formation = guard.formation.is_some();
                             let saved_target = guard.drones.get(&drone_id).and_then(|d| d.target_position);
                             drop(guard);
 
-                            if let Some((tx, ty, tz)) = saved_target {
+                            if has_active_formation {
+                                println!(
+                                    "[coordinator] AUTOMATIC RE-FORMATION: Drone {} recovered! Re-integrating drone into active formation...",
+                                    drone_id
+                                );
+                                trigger_line_formation(Arc::clone(&swarm_state));
+                            } else if let Some((tx, ty, tz)) = saved_target {
                                 println!(
                                     "[coordinator] RESILIENCE: Drone {} recovered! Re-sending target position ({}, {}, {})...",
                                     drone_id, tx, ty, tz
