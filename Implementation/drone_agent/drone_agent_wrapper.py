@@ -210,13 +210,25 @@ class DroneAgentWrapper(Node):
             dz = self.target_z - self.current_z
             distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
+        # Vertical-First Transit check: If target_z is layer height (>4.5m) and current_z is below layer height,
+        # ascend vertically FIRST before applying horizontal velocity!
+        vertical_first = False
+        if self.target_z > 4.5 and self.current_z < (self.target_z - 0.25):
+            vertical_first = True
+
         cmd = Twist()
 
         if distance > self.position_tolerance:
-            # 1. Attractive velocity vector towards target position
-            vx_att = self.kp_linear * dx
-            vy_att = self.kp_linear * dy
-            vz_att = self.kp_linear * dz
+            if vertical_first:
+                # Ascend vertically first: zero out horizontal attractive velocities until layer height is reached
+                vx_att = 0.0
+                vy_att = 0.0
+                vz_att = self.kp_linear * dz
+            else:
+                # 1. Attractive velocity vector towards target position
+                vx_att = self.kp_linear * dx
+                vy_att = self.kp_linear * dy
+                vz_att = self.kp_linear * dz
 
             # 2. Artificial Potential Fields (APF) 3D Repulsive force from neighboring drones
             vx_rep = 0.0
