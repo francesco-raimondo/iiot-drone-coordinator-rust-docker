@@ -367,11 +367,16 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
 
     // 1. Leader target position: (center_x, center_y, formation_z)
     let leader_target = (center_x, center_y, formation_z);
+    let mut leader_flight_z = formation_z;
     if let Some(leader_drone) = guard.drones.get_mut(&leader_id) {
+        let dist = ((leader_drone.x - center_x).powi(2) + (leader_drone.y - center_y).powi(2)).sqrt();
+        if dist > 1.0 {
+            leader_flight_z = 4.8;
+        }
         leader_drone.target_position = Some(leader_target);
     }
     guard.formation_positions.insert(leader_id.clone(), leader_target);
-    new_commands.push((leader_id.clone(), leader_target));
+    new_commands.push((leader_id.clone(), (center_x, center_y, leader_flight_z)));
 
     // 2. Compute symmetric follower target Y offsets relative to formation center Y
     let num_followers = followers.len();
@@ -385,12 +390,13 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     target_y_list.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     // 3. Match i-th follower with i-th target Y, using Altitude Layering during transit (Z=4.0 vs Z=4.8)
-    for (idx, (follower_id, _curr_y)) in followers.iter().enumerate() {
+    for (idx, (follower_id, curr_y)) in followers.iter().enumerate() {
         let target_y = target_y_list[idx];
         let saved_follower_target = (center_x, target_y, formation_z);
 
-        // Apply Altitude Layering during transit: odd-indexed followers fly at 4.8m layer
-        let flight_z = if idx % 2 == 1 { 4.8 } else { 4.0 };
+        // Apply Transit Altitude Layering: if drone moves > 1.0m or odd index, fly at 4.8m layer
+        let dist_y = (curr_y - target_y).abs();
+        let flight_z = if dist_y > 1.0 || idx % 2 == 1 { 4.8 } else { 4.0 };
         let flight_target = (center_x, target_y, flight_z);
 
         if let Some(follower_drone) = guard.drones.get_mut(follower_id) {

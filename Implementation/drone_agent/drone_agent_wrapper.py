@@ -210,6 +210,12 @@ class DroneAgentWrapper(Node):
                     vx_rep += f_rep * ux
                     vy_rep += f_rep * uy
 
+                    # Tangential local minima avoidance: If peer is directly ahead/behind along X line (|ux| < 0.3)
+                    # add a tangential push in X to curve around the blocking drone in 3D space
+                    if abs(ux) < 0.3 and abs(p_dy) > 0.1:
+                        tangent_dir = 1.0 if (self.current_x - 3.0 + 0.05) >= 0 else -1.0
+                        vx_rep += f_rep * 0.8 * tangent_dir
+
                     # Only apply vertical repulsion if drones are horizontally very close (<0.35m)
                     # to avoid pushing lower-layer drones downward during layered flight
                     if dist_xy < 0.35:
