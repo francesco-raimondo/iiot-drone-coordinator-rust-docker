@@ -56,6 +56,8 @@ struct SwarmCoordinatorState {
     formation: Option<String>,
     formation_center: Option<(f64, f64)>,
     formation_positions: HashMap<String, (f64, f64, f64)>,
+    // Y coordinate of the failed leader's formation slot, used for proximity-based election
+    last_failed_leader_y: Option<f64>,
 }
 
 impl SwarmCoordinatorState {
@@ -66,6 +68,7 @@ impl SwarmCoordinatorState {
             formation: None,
             formation_center: None,
             formation_positions: HashMap::new(),
+            last_failed_leader_y: None,
         }
     }
 }
@@ -186,6 +189,17 @@ fn handle_leader_failure(state: &mut SwarmCoordinatorState) {
             old_leader_id
         );
 
+        // Record the last known formation Y coordinate of the failed leader (if active formation exists)
+        if let Some((_cx, cy, _cz)) = state.formation_positions.get(&old_leader_id) {
+            state.last_failed_leader_y = Some(*cy);
+            println!(
+                "[coordinator] Recorded failed leader {} formation Y slot: {:.2}",
+                old_leader_id, cy
+            );
+        } else if let Some(drone) = state.drones.get(&old_leader_id) {
+            state.last_failed_leader_y = Some(drone.y);
+        }
+
         // Apply LeaderFailedReelectionTrigger to all active/suspected Followers
         for (id, drone) in state.drones.iter_mut() {
             if drone.state.s2 == Fsm2State::Follower {
@@ -203,23 +217,74 @@ fn perform_leader_selection_if_needed(state: &mut SwarmCoordinatorState) -> bool
     let mut newly_selected = false;
     // Only perform leader selection if no active leader exists
     if state.current_leader_id.is_none() {
-        let candidates: Vec<String> = state
+        let mut candidates: Vec<(String, f64)> = state
             .drones
             .iter()
             .filter(|(_, d)| d.state.s2 == Fsm2State::Candidate)
-            .map(|(id, _)| id.clone())
+            .map(|(id, d)| (id.clone(), d.y))
             .collect();
 
         if !candidates.is_empty() {
-            // Randomly select a leader among candidates
-            use std::collections::hash_map::RandomState;
-            use std::hash::{BuildHasher, Hasher};
-            let random_index = (RandomState::new().build_hasher().finish() as usize) % candidates.len();
-            let chosen_leader_id = candidates[random_index].clone();
+            let last_y_opt = state.last_failed_leader_y.take();
+
+            let chosen_leader_id = if let Some(ref_y) = last_y_opt {
+                let left_candidate = candidates
+                    .iter()
+                    .filter(|(_, y)| *y < ref_y - 0.1)
+                    .min_by(|a, b| (ref_y - a.1).partial_cmp(&(ref_y - b.1)).unwrap_or(std::cmp::Ordering::Equal));
+
+                let right_candidate = candidates
+                    .iter()
+                    .filter(|(_, y)| *y > ref_y + 0.1)
+                    .min_by(|a, b| (a.1 - ref_y).partial_cmp(&(b.1 - ref_y)).unwrap_or(std::cmp::Ordering::Equal));
+
+                let n_left = candidates.iter().filter(|(_, y)| *y < ref_y - 0.1).count();
+                let n_right = candidates.iter().filter(|(_, y)| *y > ref_y + 0.1).count();
+
+                let chosen = if n_left > n_right && left_candidate.is_some() {
+                    let lc = left_candidate.unwrap().0.clone();
+                    println!(
+                        "[coordinator] Density Leader Election (Ref Y={:.2}): N_left ({}) > N_right ({}) -> Selected LEFT candidate {}",
+                        ref_y, n_left, n_right, lc
+                    );
+                    lc
+                } else if n_right > n_left && right_candidate.is_some() {
+                    let rc = right_candidate.unwrap().0.clone();
+                    println!(
+                        "[coordinator] Density Leader Election (Ref Y={:.2}): N_right ({}) > N_left ({}) -> Selected RIGHT candidate {}",
+                        ref_y, n_right, n_left, rc
+                    );
+                    rc
+                } else {
+                    // Equal wing sizes (n_left == n_right) or 1-sided fallback: pick among top 2 adjacent candidates
+                    candidates.sort_by(|a, b| {
+                        let dist_a = (a.1 - ref_y).abs();
+                        let dist_b = (b.1 - ref_y).abs();
+                        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    let top_n = std::cmp::min(2, candidates.len());
+                    use std::collections::hash_map::RandomState;
+                    use std::hash::{BuildHasher, Hasher};
+                    let random_index = (RandomState::new().build_hasher().finish() as usize) % top_n;
+                    let chosen_id = candidates[random_index].0.clone();
+                    println!(
+                        "[coordinator] Balanced Wing Leader Election (Ref Y={:.2}, N_left={}, N_right={}): Selected adjacent candidate {} among top {}",
+                        ref_y, n_left, n_right, chosen_id, top_n
+                    );
+                    chosen_id
+                };
+                chosen
+            } else {
+                // Fallback: Randomly select among all candidates
+                use std::collections::hash_map::RandomState;
+                use std::hash::{BuildHasher, Hasher};
+                let random_index = (RandomState::new().build_hasher().finish() as usize) % candidates.len();
+                candidates[random_index].0.clone()
+            };
 
             println!(
-                "[coordinator] Selecting leader randomly among candidates {:?} -> Chosen: {}",
-                candidates, chosen_leader_id
+                "[coordinator] Leader Election Result: Selected {} as new Leader.",
+                chosen_leader_id
             );
 
             // Apply Event 2 (LeaderSelection) for all candidates
@@ -363,6 +428,9 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
         center_x, center_y, leader_id, followers.len()
     );
 
+    // Read the newly elected leader's previous formation Y slot (vacant slot) BEFORE updating leader target
+    let leader_vacant_y = guard.formation_positions.get(&leader_id).map(|p| p.1);
+
     let mut new_commands = Vec::new();
 
     // 1. Leader target position: (center_x, center_y, formation_z)
@@ -409,12 +477,11 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
     }
 
     if !unassigned_ground.is_empty() && !airborne_with_target.is_empty() {
-        // Airborne followers keep their exact saved target positions (NO movement for hovering drones)
+        // Repaired ground drone re-integration: Airborne followers keep saved targets, ground drone takes missing outer slot
         for (fid, saved_y) in airborne_with_target {
             final_assignments.push((fid, saved_y, false));
         }
 
-        // Find missing slots in target_y_list not occupied by airborne followers
         let mut missing_slots: Vec<f64> = Vec::new();
         for &ty in &target_y_list {
             let is_occupied = occupied_y_slots.iter().any(|&oy| (oy - ty).abs() < 0.1);
@@ -424,16 +491,68 @@ fn trigger_line_formation(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
         }
         missing_slots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Assign missing outer slot to repaired ground drone(s)
         for (i, fid) in unassigned_ground.iter().enumerate() {
             let slot = if i < missing_slots.len() { missing_slots[i] } else { target_y_list[0] };
             final_assignments.push((fid.clone(), slot, true));
         }
+    } else if let Some(vacant_y) = leader_vacant_y {
+        if !airborne_with_target.is_empty() {
+            // Ripple Shift Re-formation logic on Leader failure:
+            // Opposite side followers STAY 100% STATIONARY.
+            // Vacant side followers shift towards center by safety_distance, ordered innermost to outermost.
+            if vacant_y > center_y + 0.1 {
+                // Vacant slot is on the RIGHT side of leader
+                let mut right_shifting: Vec<(String, f64)> = Vec::new();
+                for (fid, saved_y) in airborne_with_target {
+                    if saved_y < center_y {
+                        // Left side follower: KEEP SLOT (0 movement)
+                        final_assignments.push((fid, saved_y, false));
+                    } else if saved_y >= vacant_y - 0.1 {
+                        // Right side follower at or beyond vacant slot: SHIFT LEFT by safety_distance
+                        let new_y = saved_y - safety_distance;
+                        right_shifting.push((fid, new_y));
+                    } else {
+                        final_assignments.push((fid, saved_y, false));
+                    }
+                }
+                // Sort innermost (closest to vacant_y) first for sequential STEP 1 -> STEP 2 launch
+                right_shifting.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                for (fid, new_y) in right_shifting {
+                    final_assignments.push((fid, new_y, false));
+                }
+            } else if vacant_y < center_y - 0.1 {
+                // Vacant slot is on the LEFT side of leader
+                let mut left_shifting: Vec<(String, f64)> = Vec::new();
+                for (fid, saved_y) in airborne_with_target {
+                    if saved_y > center_y {
+                        // Right side follower: KEEP SLOT (0 movement)
+                        final_assignments.push((fid, saved_y, false));
+                    } else if saved_y <= vacant_y + 0.1 {
+                        // Left side follower at or beyond vacant slot: SHIFT RIGHT by safety_distance
+                        let new_y = saved_y + safety_distance;
+                        left_shifting.push((fid, new_y));
+                    } else {
+                        final_assignments.push((fid, saved_y, false));
+                    }
+                }
+                // Sort innermost (closest to vacant_y) first for sequential STEP 1 -> STEP 2 launch
+                left_shifting.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                for (fid, new_y) in left_shifting {
+                    final_assignments.push((fid, new_y, false));
+                }
+            } else {
+                for (fid, saved_y) in airborne_with_target {
+                    final_assignments.push((fid, saved_y, false));
+                }
+            }
+        } else {
+            for (idx, (follower_id, _curr_y)) in followers.iter().enumerate() {
+                let is_g = guard.drones.get(follower_id).map_or(false, |d| d.z <= 2.0);
+                final_assignments.push((follower_id.clone(), target_y_list[idx], is_g));
+            }
+        }
     } else {
-        // Sorted 1:1 Positional Matching (Optimal Transport in 1D):
-        // Both followers (sorted by current Y) and target_y_list (sorted by Y) are matched
-        // positionally: i-th leftmost follower -> i-th leftmost slot.
-        // This is MATHEMATICALLY GUARANTEED to produce ZERO path crossings.
+        // Fallback 1:1 Positional Matching for initial startup
         for (idx, (follower_id, _curr_y)) in followers.iter().enumerate() {
             let is_g = guard.drones.get(follower_id).map_or(false, |d| d.z <= 2.0);
             final_assignments.push((follower_id.clone(), target_y_list[idx], is_g));
