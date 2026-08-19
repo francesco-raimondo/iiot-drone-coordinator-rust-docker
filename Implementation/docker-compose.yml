@@ -16,8 +16,7 @@ volumes:
 
 services:
 
-  # Fast-DDS Discovery Server (unicast) — replaces default
-  # multicast discovery for ROS 2.
+  # Fast-DDS Discovery Server (unicast), replaces default multicast discovery for ROS 2.
   discovery-server:
     image: ros:jazzy-ros-base
     container_name: discovery-server
@@ -113,4 +112,3 @@ services:
       swarm_net:
         ipv4_address: 172.28.0.40
     restart: unless-stopped
-

@@ -1,0 +1,21 @@
+# Rust build artifacts
+**/target/
+
+# Cargo lock override if needed (keep Cargo.lock in VCS, but ignore target)
+# Cargo.lock is tracked, target is ignored.
+
+# Python cache & virtual environments
+**/__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Docker / Temporary runtime files
+.env
+
+# IDE & OS metadata
+.DS_Store
+.idea/
+.vscode/

@@ -1,1 +1,0 @@
-/home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Kani_verify/target/kani/x86_64-unknown-linux-gnu/debug/libKani_verify.rlib: /home/francesco/Scrivania/IOT/Progetto/raimondo-iiot-drone-coordinator-rust-docker/Kani_verify/src/lib.rs
