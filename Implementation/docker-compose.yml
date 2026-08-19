@@ -96,3 +96,21 @@ services:
     networks:
       - swarm_net
     restart: unless-stopped
+
+  # FastAPI Observability & Control Server
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: server
+    hostname: server
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./server:/app
+    networks:
+      swarm_net:
+        ipv4_address: 172.28.0.40
+    restart: unless-stopped
+
