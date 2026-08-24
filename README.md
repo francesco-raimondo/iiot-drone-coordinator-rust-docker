@@ -1,4 +1,4 @@
-# 🛸 IIoT Drone Swarm Coordinator with Verified Rust FSM & ROS 2
+# IIoT Drone Swarm Coordinator with Verified Rust FSM & ROS 2
 
 A distributed and highly resilient swarm coordination system for IIoT (*Industrial Internet of Things*) drones, built in **Rust** and **ROS 2 Jazzy**, integrated with the **Gazebo Sim** 3D simulator, and formally verified using the **Kani** model checker.
 
@@ -6,28 +6,32 @@ The project features a Web Observability & Control Dashboard built with **FastAP
 
 ---
 
-## 📌 Table of Contents
-- [What is the Project](#-what-is-the-project)
-- [🛠️ Technologies Used](#️-technologies-used)
-- [🏗️ System Architecture](#️-system-architecture)
+## Table of Contents
+- [What is the Project](#what-is-the-project)
+- [Technologies Used](#technologies-used)
+- [System Architecture](#system-architecture)
   - [Dual Finite State Machines (Dual FSM)](#dual-finite-state-machines-dual-fsm)
   - [Formal Verification with Kani](#formal-verification-with-kani)
   - [Leader Election & Dynamic Formation Algorithm](#leader-election--dynamic-formation-algorithm)
   - [3D Obstacle Avoidance (APF & Layering)](#3d-obstacle-avoidance-apf--layering)
-- [📋 System Requirements](#-system-requirements)
-- [🚀 How to Launch the Simulation](#-how-to-launch-the-simulation)
+- [System Requirements](#system-requirements)
+- [How to Launch the Simulation](#how-to-launch-the-simulation)
   - [1. X11 Display Configuration (for Gazebo GUI)](#1-x11-display-configuration-for-gazebo-gui)
   - [2. Launching Docker Containers](#2-launching-docker-containers)
   - [3. Opening the Web Dashboard](#3-opening-the-web-dashboard)
-- [🎮 How to Run the Simulation (Step-by-Step)](#-how-to-run-the-simulation-step-by-step)
+- [How to Run the Simulation (Step-by-Step)](#how-to-run-the-simulation-step-by-step)
   - [A. Triggering Line Formation](#a-triggering-line-formation)
   - [B. Simulating Drone Failure (Pause Container)](#b-simulating-drone-failure-pause-container)
   - [C. Simulating Drone Repair (Unpause Container)](#c-simulating-drone-repair-unpause-container)
-- [🛑 How to Teardown & Stop Everything](#-how-to-teardown--stop-everything)
+- [How to Teardown & Stop Everything](#how-to-teardown--stop-everything)
+- [Theoretical Background](#theoretical-background)
+  - [1. Data Distribution Service (DDS) & Fast-DDS](#1-data-distribution-service-dds--fast-dds)
+    - [Fast-DDS Discovery Protocol & Step-by-Step Sequence](#fast-dds-discovery-protocol--step-by-step-sequence)
+    - [Architectural Decision: Docker Bridge + Discovery Server vs. Macvlan](#architectural-decision-docker-bridge--discovery-server-vs-macvlan)
 
 ---
 
-## 🔍 What is the Project
+## What is the Project
 
 This project implements a full end-to-end autonomous coordination solution for industrial IIoT drone swarms. The swarm capability set includes:
 1. **Dynamic Registration**: Automatic onboarding of new drones entering the ROS 2 graph.
@@ -39,7 +43,7 @@ This project implements a full end-to-end autonomous coordination solution for i
 
 ---
 
-## 🛠️ Technologies Used
+## Technologies Used
 
 | Component | Technology | Description |
 | :--- | :--- | :--- |
@@ -55,36 +59,37 @@ This project implements a full end-to-end autonomous coordination solution for i
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 The architecture consists of isolated microservices connected via a dedicated Docker bridge network (`swarm_net`: `172.28.0.0/16`).
 
-```
-                              ┌───────────────────────────────┐
-                              │     Fast-DDS Discovery        │
-                              │     Server (172.28.0.10)      │
-                              └──────────────┬────────────────┘
-                                             │
-      ┌──────────────────────────────────────┼──────────────────────────────────────┐
-      │                                      │                                      │
-┌─────▼──────────────┐             ┌─────────▼──────────┐                 ┌─────────▼──────────┐
-│  Rust Coordinator  │             │   Gazebo Sim 3D    │                 │   FastAPI Server   │
-│   (172.28.0.30)    │             │   (172.28.0.20)    │                 │   (172.28.0.40)    │
-│  - Dual FSM Kani   │             │  - Spawn X3 Drones │                 │  - Port 8000 Web UI│
-│  - Leader Election │             │  - Gazebo Odometry │                 │  - Docker Sock API │
-└─────┬──────────────┘             └─────────▲──────────┘                 └─────────▲──────────┘
-      │                                      │                                      │
-      │   ROS 2 Topics:                      │                                      │
-      │   /swarm/register                    │ /drone_N/cmd_vel                     │ HTTP REST / Pause
-      │   /swarm/heartbeat                   │ /drone_N/odometry                    │ / Unpause Drone
-      │   /swarm/goto                        │                                      │
-      │   /swarm/formation                   │                                      │
-      └───────────────────────────┬──────────┴──────────────────────────────────────┘
-                                  │
-                  ┌───────────────┴───────────────┐
-                  │    Drone Agent Containers     │
-                  │ (drone_1, drone_2, drone_N)   │
-                  └───────────────────────────────┘
+```mermaid
+graph TD
+    subgraph DS["Discovery Hub"]
+        DDS["Fast-DDS Discovery Server<br/>(172.28.0.10:11811)"]
+    end
+
+    subgraph COORD["Control Layer"]
+        RUST["Rust Swarm Coordinator<br/>(172.28.0.30)<br/>- Verified Dual-FSM<br/>- Leader Election"]
+        SERVER["FastAPI Server<br/>(172.28.0.40:8000)<br/>- Web Dashboard UI"]
+    end
+
+    subgraph SIM["Physical & Drone Layer"]
+        GAZEBO["Gazebo Sim Container<br/>(172.28.0.20)<br/>- 3D Physics Engine"]
+        DRONES["Drone Agent Containers<br/>(drone_1, drone_2, drone_N)"]
+    end
+
+    RUST -. "Unicast Discovery" .-> DDS
+    GAZEBO -. "Unicast Discovery" .-> DDS
+    DRONES -. "Unicast Discovery" .-> DDS
+
+    DRONES -- "ROS 2: /swarm/register & /swarm/heartbeat" --> RUST
+    RUST -- "ROS 2: /swarm/goto" --> DRONES
+    DRONES -- "ROS 2: /{drone_id}/cmd_vel" --> GAZEBO
+    GAZEBO -- "ROS 2: /{drone_id}/odometry" --> DRONES
+
+    SERVER -- "Docker Sock API: Pause/Unpause" --> DRONES
+    SERVER -- "ROS 2: /swarm/formation" --> RUST
 ```
 
 ### Dual Finite State Machines (Dual FSM)
@@ -111,17 +116,17 @@ Located in the `Kani_verify/` directory, proof harnesses written for the **Kani*
 
 ### Leader Election & Dynamic Formation Algorithm
 
-- **Density & Proximity Leader Election**: When the active Leader fails, the Rust coordinator inspects the vacant $Y$ coordinate of the lost Leader and selects a replacement candidate based on wing density (left vs right side candidate count) to minimize total swarm movement.
+- **Density & Proximity Leader Election**: When the active Leader fails, the Rust coordinator inspects the vacant Y coordinate of the lost Leader and selects a replacement candidate based on wing density (left vs right side candidate count) to minimize total swarm movement.
 - **Ripple Shift Re-Formation**: When a drone or Leader fails during active line formation, the swarm executes a sequential shift (*Ripple Shift*): drones on the opposite wing stay completely stationary, while drones on the affected side translate inward to fill the gap safely.
 
 ### 3D Obstacle Avoidance (APF & Layering)
 
-- **3D Artificial Potential Fields (APF)**: Each drone agent computes a repulsive velocity vector once another drone is approaching to avoid collisions
+- **3D Artificial Potential Fields (APF)**: Each drone agent computes a repulsive velocity vector once another drone is approaching to avoid collisions.
 - **Directional Altitude Layering**: During formation reorganization, drones crossing paths adjust altitude (e.g., 4.8m vs 5.6m) to prevent mid-air collisions.
 
 ---
 
-## 📋 System Requirements
+## System Requirements
 
 - **Operating System**: Linux (Ubuntu 22.04 / 24.04 recommended).
 - **Docker**: Docker Engine 20.10+ with permissions to run without `sudo` (user added to the `docker` group).
@@ -131,7 +136,7 @@ Located in the `Kani_verify/` directory, proof harnesses written for the **Kani*
 
 ---
 
-## 🚀 How to Launch the Simulation
+## How to Launch the Simulation
 
 ### 1. X11 Display Configuration (for Gazebo GUI)
 
@@ -150,7 +155,7 @@ cd Implementation
 docker compose up --build --scale drone=3
 ```
 
-> 💡 **Note**: On first run, Docker will download base ROS 2 images and compile both the Rust coordinator and FastAPI server. Wait until all containers report healthy status in the terminal logs.
+> **Note**: On first run, Docker will download base ROS 2 images and compile both the Rust coordinator and FastAPI server. Wait until all containers report healthy status in the terminal logs.
 
 ### 3. Opening the Web Dashboard
 
@@ -162,7 +167,7 @@ http://localhost:8000
 
 ---
 
-## 🎮 How to Run the Simulation (Step-by-Step)
+## How to Run the Simulation (Step-by-Step)
 
 ### A. Triggering Line Formation
 
@@ -197,7 +202,7 @@ http://localhost:8000
 
 ---
 
-## 🛑 How to Teardown & Stop Everything
+## How to Teardown & Stop Everything
 
 To stop all services, clean up Docker containers, networks, and volumes:
 
@@ -221,3 +226,89 @@ xhost -local:root
 ```
 
 ---
+
+## Theoretical Background
+
+### 1. Data Distribution Service (DDS) & Fast-DDS
+
+#### What is DDS?
+**Data Distribution Service (DDS)** is an Object Management Group (OMG) open standard for data-centric, real-time, peer-to-peer publish-subscribe middleware. Unlike traditional message-oriented middleware, DDS centers around data ("topics") rather than endpoints.
+
+#### DDS vs. Traditional Client-Server Architecture
+Traditional Client-Server architectures (such as HTTP/REST request-response) introduce major bottlenecks in real-time, multi-agent robotic systems. The table below outlines how DDS resolves key Client-Server limitations:
+
+| Client-Server Limitation | Real-World Problem | How DDS Resolves It |
+| :--- | :--- | :--- |
+| **Single Point of Failure** | If the central server/broker crashes, the entire system halts instantly. | **Native Peer-to-Peer**: No central broker is required. If a node fails, remaining nodes continue communicating seamlessly. |
+| **Bottlenecks (Latency & Bandwidth)** | All network traffic passes through a central server, causing severe congestion as data volume increases. | **Direct Communication**: Data flows directly from publisher to subscriber with zero intermediate hops, minimizing latency and maximizing throughput. |
+| **Rigid Coupling** | Clients must know the exact IP address and port of the server to send or request data. | **Data-Centricity**: Nodes do not query *"Who are you?"*, but rather *"Who is interested in Topic X?"*. Nodes publish and receive data anonymously without knowing peer IP addresses. |
+| **"All-or-Nothing" Service Management** | Managing different delivery requirements for distinct data flows over the same channel is difficult. | **Granular Quality of Service (QoS)**: Fine-grained rules can be configured per topic flow (e.g., reliability, durability, deadline, liveliness). |
+
+#### What is Fast-DDS?
+**Fast-DDS** (developed by eProsima) is a C++ implementation of the OMG DDS standard and the Real-Time Publish-Subscribe (RTPS) protocol. It is the default middleware implementation powering **ROS 2 Jazzy Jalisco**, providing low-latency, deterministic data exchange for robotic entities.
+
+#### Why Fast-DDS Discovery Server in this Project?
+By default, ROS 2 relies on **UDP Multicast** for dynamic peer discovery. However, containerized microservice architectures using Docker bridge networks frequently block or restrict UDP multicast packets across isolated containers.
+
+To solve this problem, this project utilizes the **Fast-DDS Discovery Server** (running on port `11811`):
+- It replaces multicast discovery with a **centralized unicast architecture**.
+- Each drone agent and the Rust coordinator register directly with the Discovery Server upon container startup.
+- This ensures deterministic, instant discovery of all ROS 2 nodes across Docker containers without packet loss or network isolation issues.
+
+#### Fast-DDS Discovery Protocol & Step-by-Step Sequence
+
+The Fast-DDS Discovery Server converts ROS 2 discovery into a two-phase process: **Server-Mediated Discovery** followed by **Direct Peer-to-Peer Data Communication**.
+
+##### Step-by-Step Discovery Protocol Breakdown:
+
+1. **Step 1: Participant Discovery Protocol (PDP)**
+   - Upon container launch, each ROS 2 participant (`drone_1`, `coordinator`, `gazebo`) sends a unicast **PDP announcement** to the Discovery Server at `172.28.0.10:11811`.
+   - The PDP payload contains node identity (GUID), container IP address, and supported transport capabilities.
+
+2. **Step 2: Endpoint Discovery Protocol (EDP)**
+   - Nodes declare their active ROS 2 topics to the Discovery Server.
+   - For example, `drone_1` declares a *DataWriter* for topic `/swarm/heartbeat`, while `coordinator` declares a *DataReader* for the same topic along with their QoS parameters.
+
+3. **Step 3: Server-Side Endpoint Matching & Relay**
+   - The Discovery Server matches compatible *DataWriters* and *DataReaders* across the network.
+   - The Discovery Server relays peer IP endpoints and port details directly to both participants.
+
+4. **Step 4: Direct Peer-to-Peer (P2P) RTPS Data Transport (Post-Discovery)**
+   - Once discovery matching completes, **the Discovery Server steps out of the data path**.
+   - All high-frequency topic data (heartbeats, odometry, target coordinates, velocity commands) flows **directly peer-to-peer** between nodes over RTPS UDP unicast without passing through the Discovery Server.
+
+##### Sequence Diagram: Discovery Phase vs. Post-Discovery P2P Communication
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant D1 as Drone Agent (Publisher)
+    participant DS as Fast-DDS Discovery Server (172.28.0.10:11811)
+    participant RC as Rust Coordinator (Subscriber)
+
+    note over D1,RC: Phase 1: Unicast Discovery & Endpoint Matching (Server-Mediated)
+    D1->>DS: 1. PDP Unicast Announcement (IP: 172.28.0.x, GUID)
+    RC->>DS: 2. PDP Unicast Announcement (IP: 172.28.0.30, GUID)
+    D1->>DS: 3. EDP Publication: Topic '/swarm/heartbeat' (DataWriter Endpoint)
+    RC->>DS: 4. EDP Subscription: Topic '/swarm/heartbeat' (DataReader Endpoint)
+    DS-->>D1: 5. Peer Endpoint Notification (Coordinator IP: 172.28.0.30, QoS)
+    DS-->>RC: 6. Peer Endpoint Notification (Drone Agent IP: 172.28.0.x, QoS)
+
+    note over D1,RC: Phase 2: Direct Peer-to-Peer RTPS Communication (Post-Discovery)
+    rect rgb(235, 245, 255)
+        D1->>RC: 7. Direct RTPS Unicast Message: Heartbeat Payload (1 Hz)
+        D1->>RC: 8. Direct RTPS Unicast Message: Heartbeat Payload (1 Hz)
+        note over DS: Discovery Server is NOT involved in data payload transport!
+    end
+```
+
+
+#### Architectural Decision: Docker Bridge + Discovery Server vs. Macvlan
+When deploying containerized ROS 2 swarms, selecting the network driver involves critical trade-offs:
+
+| Network Strategy | Architectural Complexity | Setup Overhead | Multicast Support | Decision |
+| :--- | :--- | :--- | :--- | :--- |
+| **Custom Macvlan Network** | **High**: Binds container virtual interfaces directly to host physical NICs, requiring subnet management and custom host-to-container routing rules. | **Complex & Time-Consuming**: Fragile, platform-dependent, and prone to host OS network collisions. | Native UDP Multicast enabled. | ❌ Discouraged due to excessive configuration overhead. |
+| **Docker Bridge + Fast-DDS Discovery Server** | **Low**: Standard Docker bridge network (`swarm_net`) with isolated IP subnet allocation. | **Minimal & Deterministic**: Simply run the Discovery Server on port `11811` and inject `DISCOVERY_SERVER_IP=172.28.0.10` via environment variables. | Converted to Unicast TCP/UDP. | ✅ **Chosen Solution**: Seamless setup, portable, cross-platform, and highly reliable. |
+
+**Rationale**: Manually configuring a `macvlan` driver solely to enable classical DDS UDP multicast discovery is time-consuming and fragile across different host operating systems. Leveraging a standard **Docker Bridge** network combined with the **Fast-DDS Discovery Server** provides a plug-and-play, deterministic, and highly portable architecture requiring zero host-level network modifications.
