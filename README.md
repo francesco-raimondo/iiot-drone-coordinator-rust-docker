@@ -77,33 +77,7 @@ This project implements a full end-to-end autonomous coordination solution for i
 
 The architecture consists of isolated microservices connected via a dedicated Docker bridge network (`swarm_net`: `172.28.0.0/16`).
 
-```
-                              ┌───────────────────────────────┐
-                              │     Fast-DDS Discovery        │
-                              │     Server (172.28.0.10)      │
-                              └──────────────┬────────────────┘
-                                             │
-      ┌──────────────────────────────────────┼──────────────────────────────────────┐
-      │                                      │                                      │
-┌─────▼──────────────┐             ┌─────────▼──────────┐                 ┌─────────▼──────────┐
-│  Rust Coordinator  │             │   Gazebo Sim 3D    │                 │   FastAPI Server   │
-│   (172.28.0.30)    │             │   (172.28.0.20)    │                 │   (172.28.0.40)    │
-│  - Dual FSM Kani   │             │  - Spawn X3 Drones │                 │  - Port 8000 Web UI│
-│  - Leader Election │             │  - Gazebo Odometry │                 │  - Docker Sock API │
-└─────┬──────────────┘             └─────────▲──────────┘                 └─────────▲──────────┘
-      │                                      │                                      │
-      │   ROS 2 Topics:                      │                                      │
-      │   /swarm/register                    │ /drone_N/cmd_vel                     │ HTTP REST / Pause
-      │   /swarm/heartbeat                   │ /drone_N/odometry                    │ / Unpause Drone
-      │   /swarm/goto                        │                                      │
-      │   /swarm/formation                   │                                      │
-      └───────────────────────────┬──────────┴──────────────────────────────────────┘
-                                  │
-                  ┌───────────────┴───────────────┐
-                  │    Drone Agent Containers     │
-                  │ (drone_1, drone_2, drone_N)   │
-                  └───────────────────────────────┘
-```
+![System Architecture & Topology](docs/images/Base_Architecture.png)
 
 
 ### Dual Finite State Machines (Dual FSM)

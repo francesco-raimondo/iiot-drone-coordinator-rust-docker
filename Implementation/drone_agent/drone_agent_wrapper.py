@@ -81,7 +81,7 @@ class DroneAgentWrapper(Node):
         self.peer_positions = {}
         self.peer_subs = []
         self.fresh_target_received = False
-        for i in range(1, 11):
+        for i in range(1, 21):
             peer_id = f"drone_{i}"
             if peer_id != self.drone_id:
                 sub = self.create_subscription(
