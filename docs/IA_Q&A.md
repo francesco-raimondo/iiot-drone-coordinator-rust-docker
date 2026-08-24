@@ -1,6 +1,5 @@
-# Log Domande e Risposte — Progetto Drone Coordinator (Parte 1)
-
-> Trascrizione formattata della conversazione con l'IA relativa allo sviluppo del progetto *Resilient Multi-Agent Drone Coordinator in Rust with Docker-Based Deployment*.
+# History of the conversation between me and the IA used to help me in the development of the project
+The AI I decided to use is Gemini 3.6 Flash (used most of the time at "Low" consumption) as an agent in Antigravity IDE
 
 ---
 
