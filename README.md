@@ -4,27 +4,19 @@ A distributed and highly resilient swarm coordination system for IIoT (*Industri
 
 The project features a Web Observability & Control Dashboard built with **FastAPI**, enabling real-time monitoring of the drone swarm, triggering geometric flight formations, and simulating drone agent failures and repairs within a containerized **Docker Compose** environment.
 
+> 💡 **Quickstart**: If you want to launch and run the simulation immediately, jump directly to the guide here: [🚀 Getting Started & Execution Guide](#-getting-started--execution-guide).
+
 ---
 
 ## Table of Contents
 - [What is the Project](#what-is-the-project)
 - [Technologies Used](#technologies-used)
-- [System Architecture](#system-architecture)
+- [System Architecture & Theoretical Foundations](#system-architecture--theoretical-foundations)
+  - [System Topology & Microservices](#system-topology--microservices)
   - [Dual Finite State Machines (Dual FSM)](#dual-finite-state-machines-dual-fsm)
   - [Formal Verification with Kani](#formal-verification-with-kani)
   - [Leader Election & Dynamic Formation Algorithm](#leader-election--dynamic-formation-algorithm)
   - [3D Obstacle Avoidance (APF & Layering)](#3d-obstacle-avoidance-apf--layering)
-- [System Requirements](#system-requirements)
-- [How to Launch the Simulation](#how-to-launch-the-simulation)
-  - [1. X11 Display Configuration (for Gazebo GUI)](#1-x11-display-configuration-for-gazebo-gui)
-  - [2. Launching Docker Containers](#2-launching-docker-containers)
-  - [3. Opening the Web Dashboard](#3-opening-the-web-dashboard)
-- [How to Run the Simulation (Step-by-Step)](#how-to-run-the-simulation-step-by-step)
-  - [A. Triggering Line Formation](#a-triggering-line-formation)
-  - [B. Simulating Drone Failure (Pause Container)](#b-simulating-drone-failure-pause-container)
-  - [C. Simulating Drone Repair (Unpause Container)](#c-simulating-drone-repair-unpause-container)
-- [How to Teardown & Stop Everything](#how-to-teardown--stop-everything)
-- [Theoretical Background](#theoretical-background)
   - [1. Data Distribution Service (DDS) & Fast-DDS](#1-data-distribution-service-dds--fast-dds)
     - [Fast-DDS Discovery Protocol & Step-by-Step Sequence](#fast-dds-discovery-protocol--step-by-step-sequence)
     - [Architectural Decision: Docker Bridge + Discovery Server vs. Macvlan](#architectural-decision-docker-bridge--discovery-server-vs-macvlan)
@@ -37,6 +29,17 @@ The project features a Web Observability & Control Dashboard built with **FastAP
     - [What is ROS 2?](#what-is-ros-2)
     - [What is drone_agent_wrapper.py & Its Role?](#what-is-drone_agent_wrapperpy--its-role)
     - [Scalability, Container Isolation & Dynamic Spawning (DRONE_NAME)](#scalability-container-isolation--dynamic-spawning-drone_name)
+- [Getting Started & Execution Guide](#getting-started--execution-guide)
+  - [System Requirements](#system-requirements)
+  - [How to Launch the Simulation](#how-to-launch-the-simulation)
+    - [1. X11 Display Configuration (for Gazebo GUI)](#1-x11-display-configuration-for-gazebo-gui)
+    - [2. Launching Docker Containers](#2-launching-docker-containers)
+    - [3. Opening the Web Dashboard](#3-opening-the-web-dashboard)
+  - [How to Run the Simulation (Step-by-Step)](#how-to-run-the-simulation-step-by-step)
+    - [A. Triggering Line Formation](#a-triggering-line-formation)
+    - [B. Simulating Drone Failure (Pause Container)](#b-simulating-drone-failure-pause-container)
+    - [C. Simulating Drone Repair (Unpause Container)](#c-simulating-drone-repair-unpause-container)
+  - [How to Teardown & Stop Everything](#how-to-teardown--stop-everything)
 
 ---
 
@@ -68,7 +71,9 @@ This project implements a full end-to-end autonomous coordination solution for i
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture & Theoretical Foundations
+
+### System Topology & Microservices
 
 The architecture consists of isolated microservices connected via a dedicated Docker bridge network (`swarm_net`: `172.28.0.0/16`).
 
@@ -134,109 +139,6 @@ Located in the `Kani_verify/` directory, proof harnesses written for the **Kani*
 - **Directional Altitude Layering**: During formation reorganization, drones crossing paths adjust altitude (e.g., 4.8m vs 5.6m) to prevent mid-air collisions.
 
 ---
-
-## System Requirements
-
-- **Operating System**: Linux (Ubuntu 22.04 / 24.04 recommended).
-- **Docker**: Docker Engine 20.10+ with permissions to run without `sudo` (user added to the `docker` group).
-- **Docker Compose**: Docker Compose v2 (`docker compose`).
-- **X11 Display Server**: Required for rendering the Gazebo 3D GUI window (`xhost` installed).
-- **Recommended Hardware**: Quad-Core CPU+, 8 GB RAM.
-
----
-
-## How to Launch the Simulation
-
-### 1. X11 Display Configuration (for Gazebo GUI)
-
-To allow the Gazebo Docker container to open its 3D GUI window on your Linux host display, run the following command in your terminal:
-
-```bash
-xhost +local:root
-```
-
-### 2. Launching Docker Containers
-
-Navigate to the `Implementation/` directory and spin up the microservices, specifying the desired number of drones using `--scale drone=N` (for example, **3 drones**):
-
-```bash
-cd Implementation
-docker compose up --build --scale drone=3
-```
-
-> **Note**: On first run, Docker will download base ROS 2 images and compile both the Rust coordinator and FastAPI server. Wait until all containers report healthy status in the terminal logs.
-
-### 3. Opening the Web Dashboard
-
-Once containers are running, open your web browser and navigate to:
-
-```text
-http://localhost:8000
-```
-
----
-
-## How to Run the Simulation (Step-by-Step)
-
-### A. Triggering Line Formation
-
-1. Open the Web Dashboard (`http://localhost:8000`). You will see the total drone count (e.g., 3 drones: `drone_1`, `drone_2`, `drone_3`), individual status cards, and the **Active Leader** indicator (e.g., `Leader: drone_1`).
-2. In the **Swarm Controls** panel, click **"Trigger Line Formation"**.
-3. **Observed Behavior**:
-   - The Rust coordinator assigns target coordinates (X_C, Y_C, Z=4.0m) to the Leader and symmetric 2.0m-spaced targets along the Y-axis to Follower drones.
-   - In the Gazebo 3D window, drones take off from the ground and align into a line formation centered around the Leader.
-
----
-
-### B. Simulating Drone Failure (Pause Container)
-
-1. On the Web Dashboard, locate the card for the **Leader** (or any other drone).
-2. Click the **"Pause"** button on the target drone's card (e.g., `drone_1`).
-3. **Observed Behavior**:
-   - The Docker container is paused, simulating hardware failure or communication loss.
-   - **Phase 1 (5s Timeout)**: After 5s without heartbeats, the drone's S1 state transitions from `Active` to `Suspected` (highlighted in orange/yellow).
-   - **Phase 2 (10s Timeout)**: After 10s, S1 transitions to `Failed` (highlighted in red) and the drone is despawned from Gazebo.
-   - **Re-election & Re-formation**: If the failed drone was the Leader, the `LeaderFailedReelectionTrigger` event fires. A new Leader is elected, and remaining drones execute a *Ripple Shift* to close the formation gap without collisions.
-
----
-
-### C. Simulating Drone Repair (Unpause Container)
-
-1. On the Web Dashboard, click **"Unpause"** next to the paused drone (e.g., `drone_1`).
-2. **Observed Behavior**:
-   - The drone container resumes operation.
-   - The drone agent sends a registration request to the coordinator.
-   - The coordinator triggers Event 6 (`RepairCompleted`): S1 transitions `Failed` to `Unregistered` to turn `Active` as a `Follower`.
-   - **Automatic Re-integration**: The swarm detects the recovered drone and re-integrates it into the active formation, assigning it an outer slot.
-
----
-
-## How to Teardown & Stop Everything
-
-To stop all services, clean up Docker containers, networks, and volumes:
-
-1. Press `Ctrl + C` in the terminal where Docker Compose is running.
-2. Execute the teardown command inside `Implementation/`:
-
-```bash
-docker compose down
-```
-
-3. (Optional) To clean up named volumes (e.g., generated SDF model files):
-
-```bash
-docker compose down -v
-```
-
-4. Restore standard X11 display security rules on your host machine:
-
-```bash
-xhost +local:root
-```
-
----
-
-## Theoretical Background
 
 ### 1. Data Distribution Service (DDS) & Fast-DDS
 
@@ -396,3 +298,108 @@ The agent wrapper design enables horizontal scalability across Docker containers
    - When a drone registers, the Rust coordinator function `spawn_drone_in_gazebo` reads the SDF model template (`/app/models/x3_uav/model.sdf`), replaces `__ROBOT_NAMESPACE__` with `/model/{drone_id}`, and writes a dedicated per-drone model file (`/app/spawned/{drone_id}_model.sdf`).
    - The coordinator then invokes `ros2 run ros_gz_sim create -name {drone_id} -file /app/spawned/{drone_id}_model.sdf` to dynamically spawn the drone in Gazebo.
    - This dynamic namespace injection isolates ROS 2 topics (`/{drone_id}/cmd_vel`, `/{drone_id}/odometry`), allowing the swarm to scale horizontally without topic collisions via `docker compose up --scale drone=N`.
+
+---
+
+## 🚀 Getting Started & Execution Guide
+
+### System Requirements
+
+- **Operating System**: Linux (Ubuntu 22.04 / 24.04 recommended).
+- **Docker**: Docker Engine 20.10+ with permissions to run without `sudo` (user added to the `docker` group).
+- **Docker Compose**: Docker Compose v2 (`docker compose`).
+- **X11 Display Server**: Required for rendering the Gazebo 3D GUI window (`xhost` installed).
+- **Recommended Hardware**: Quad-Core CPU+, 8 GB RAM.
+
+---
+
+### How to Launch the Simulation
+
+#### 1. X11 Display Configuration (for Gazebo GUI)
+
+To allow the Gazebo Docker container to open its 3D GUI window on your Linux host display, run the following command in your terminal:
+
+```bash
+xhost +local:root
+```
+
+#### 2. Launching Docker Containers
+
+Navigate to the `Implementation/` directory and spin up the microservices, specifying the desired number of drones using `--scale drone=N` (for example, **3 drones**):
+
+```bash
+cd Implementation
+docker compose up --build --scale drone=3
+```
+
+> **Note**: On first run, Docker will download base ROS 2 images and compile both the Rust coordinator and FastAPI server. Wait until all containers report healthy status in the terminal logs.
+
+#### 3. Opening the Web Dashboard
+
+Once containers are running, open your web browser and navigate to:
+
+```text
+http://localhost:8000
+```
+
+---
+
+### How to Run the Simulation (Step-by-Step)
+
+#### A. Triggering Line Formation
+
+1. Open the Web Dashboard (`http://localhost:8000`). You will see the total drone count (e.g., 3 drones: `drone_1`, `drone_2`, `drone_3`), individual status cards, and the **Active Leader** indicator (e.g., `Leader: drone_1`).
+2. In the **Swarm Controls** panel, click **"Trigger Line Formation"**.
+3. **Observed Behavior**:
+   - The Rust coordinator assigns target coordinates (X_C, Y_C, Z=4.0m) to the Leader and symmetric 2.0m-spaced targets along the Y-axis to Follower drones.
+   - In the Gazebo 3D window, drones take off from the ground and align into a line formation centered around the Leader.
+
+---
+
+#### B. Simulating Drone Failure (Pause Container)
+
+1. On the Web Dashboard, locate the card for the **Leader** (or any other drone).
+2. Click the **"Pause"** button on the target drone's card (e.g., `drone_1`).
+3. **Observed Behavior**:
+   - The Docker container is paused, simulating hardware failure or communication loss.
+   - **Phase 1 (5s Timeout)**: After 5s without heartbeats, the drone's S1 state transitions from `Active` to `Suspected` (highlighted in orange/yellow).
+   - **Phase 2 (10s Timeout)**: After 10s, S1 transitions to `Failed` (highlighted in red) and the drone is despawned from Gazebo.
+   - **Re-election & Re-formation**: If the failed drone was the Leader, the `LeaderFailedReelectionTrigger` event fires. A new Leader is elected, and remaining drones execute a *Ripple Shift* to close the formation gap without collisions.
+
+---
+
+#### C. Simulating Drone Repair (Unpause Container)
+
+1. On the Web Dashboard, click **"Unpause"** next to the paused drone (e.g., `drone_1`).
+2. **Observed Behavior**:
+   - The drone container resumes operation.
+   - The drone agent sends a registration request to the coordinator.
+   - The coordinator triggers Event 6 (`RepairCompleted`): S1 transitions `Failed` to `Unregistered` to turn `Active` as a `Follower`.
+   - **Automatic Re-integration**: The swarm detects the recovered drone and re-integrates it into the active formation, assigning it an outer slot.
+
+---
+
+### How to Teardown & Stop Everything
+
+To stop all services, clean up Docker containers, networks, and volumes:
+
+1. Press `Ctrl + C` in the terminal where Docker Compose is running.
+2. Execute the teardown command inside `Implementation/`:
+
+```bash
+docker compose down
+```
+
+3. (Optional) To clean up named volumes (e.g., generated SDF model files):
+
+```bash
+docker compose down -v
+```
+
+4. Restore standard X11 display security rules on your host machine:
+
+```bash
+xhost +local:root
+```
+
+---
