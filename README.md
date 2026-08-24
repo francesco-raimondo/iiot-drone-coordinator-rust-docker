@@ -28,6 +28,15 @@ The project features a Web Observability & Control Dashboard built with **FastAP
   - [1. Data Distribution Service (DDS) & Fast-DDS](#1-data-distribution-service-dds--fast-dds)
     - [Fast-DDS Discovery Protocol & Step-by-Step Sequence](#fast-dds-discovery-protocol--step-by-step-sequence)
     - [Architectural Decision: Docker Bridge + Discovery Server vs. Macvlan](#architectural-decision-docker-bridge--discovery-server-vs-macvlan)
+  - [2. Asynchronous Multithreaded Coordinator & Thread Architecture](#2-asynchronous-multithreaded-coordinator--thread-architecture)
+    - [Concurrency Primitives & Standard Library](#concurrency-primitives--standard-library)
+    - [Thread Topology & Responsibilities](#thread-topology--responsibilities)
+    - [Thread Communication & Memory Synchronization](#thread-communication--memory-synchronization)
+    - [Architectural Justification: std::thread + Arc<Mutex> vs. Actor Frameworks](#architectural-justification-stdthread--arcmutex-vs-actor-frameworks)
+  - [3. ROS 2 & Drone Agent Node Architecture (drone_agent_wrapper.py)](#3-ros-2--drone-agent-node-architecture-drone_agent_wrapperpy)
+    - [What is ROS 2?](#what-is-ros-2)
+    - [What is drone_agent_wrapper.py & Its Role?](#what-is-drone_agent_wrapperpy--its-role)
+    - [Scalability, Container Isolation & Dynamic Spawning (DRONE_NAME)](#scalability-container-isolation--dynamic-spawning-drone_name)
 
 ---
 
@@ -59,38 +68,38 @@ This project implements a full end-to-end autonomous coordination solution for i
 
 ---
 
-## System Architecture
+## 🏗️ System Architecture
 
 The architecture consists of isolated microservices connected via a dedicated Docker bridge network (`swarm_net`: `172.28.0.0/16`).
 
-```mermaid
-graph TD
-    subgraph DS["Discovery Hub"]
-        DDS["Fast-DDS Discovery Server<br/>(172.28.0.10:11811)"]
-    end
-
-    subgraph COORD["Control Layer"]
-        RUST["Rust Swarm Coordinator<br/>(172.28.0.30)<br/>- Verified Dual-FSM<br/>- Leader Election"]
-        SERVER["FastAPI Server<br/>(172.28.0.40:8000)<br/>- Web Dashboard UI"]
-    end
-
-    subgraph SIM["Physical & Drone Layer"]
-        GAZEBO["Gazebo Sim Container<br/>(172.28.0.20)<br/>- 3D Physics Engine"]
-        DRONES["Drone Agent Containers<br/>(drone_1, drone_2, drone_N)"]
-    end
-
-    RUST -. "Unicast Discovery" .-> DDS
-    GAZEBO -. "Unicast Discovery" .-> DDS
-    DRONES -. "Unicast Discovery" .-> DDS
-
-    DRONES -- "ROS 2: /swarm/register & /swarm/heartbeat" --> RUST
-    RUST -- "ROS 2: /swarm/goto" --> DRONES
-    DRONES -- "ROS 2: /{drone_id}/cmd_vel" --> GAZEBO
-    GAZEBO -- "ROS 2: /{drone_id}/odometry" --> DRONES
-
-    SERVER -- "Docker Sock API: Pause/Unpause" --> DRONES
-    SERVER -- "ROS 2: /swarm/formation" --> RUST
 ```
+                              ┌───────────────────────────────┐
+                              │     Fast-DDS Discovery        │
+                              │     Server (172.28.0.10)      │
+                              └──────────────┬────────────────┘
+                                             │
+      ┌──────────────────────────────────────┼──────────────────────────────────────┐
+      │                                      │                                      │
+┌─────▼──────────────┐             ┌─────────▼──────────┐                 ┌─────────▼──────────┐
+│  Rust Coordinator  │             │   Gazebo Sim 3D    │                 │   FastAPI Server   │
+│   (172.28.0.30)    │             │   (172.28.0.20)    │                 │   (172.28.0.40)    │
+│  - Dual FSM Kani   │             │  - Spawn X3 Drones │                 │  - Port 8000 Web UI│
+│  - Leader Election │             │  - Gazebo Odometry │                 │  - Docker Sock API │
+└─────┬──────────────┘             └─────────▲──────────┘                 └─────────▲──────────┘
+      │                                      │                                      │
+      │   ROS 2 Topics:                      │                                      │
+      │   /swarm/register                    │ /drone_N/cmd_vel                     │ HTTP REST / Pause
+      │   /swarm/heartbeat                   │ /drone_N/odometry                    │ / Unpause Drone
+      │   /swarm/goto                        │                                      │
+      │   /swarm/formation                   │                                      │
+      └───────────────────────────┬──────────┴──────────────────────────────────────┘
+                                  │
+                  ┌───────────────┴───────────────┐
+                  │    Drone Agent Containers     │
+                  │ (drone_1, drone_2, drone_N)   │
+                  └───────────────────────────────┘
+```
+
 
 ### Dual Finite State Machines (Dual FSM)
 
@@ -222,7 +231,7 @@ docker compose down -v
 4. Restore standard X11 display security rules on your host machine:
 
 ```bash
-xhost -local:root
+xhost +local:root
 ```
 
 ---
@@ -302,7 +311,6 @@ sequenceDiagram
     end
 ```
 
-
 #### Architectural Decision: Docker Bridge + Discovery Server vs. Macvlan
 When deploying containerized ROS 2 swarms, selecting the network driver involves critical trade-offs:
 
@@ -312,3 +320,79 @@ When deploying containerized ROS 2 swarms, selecting the network driver involves
 | **Docker Bridge + Fast-DDS Discovery Server** | **Low**: Standard Docker bridge network (`swarm_net`) with isolated IP subnet allocation. | **Minimal & Deterministic**: Simply run the Discovery Server on port `11811` and inject `DISCOVERY_SERVER_IP=172.28.0.10` via environment variables. | Converted to Unicast TCP/UDP. | ✅ **Chosen Solution**: Seamless setup, portable, cross-platform, and highly reliable. |
 
 **Rationale**: Manually configuring a `macvlan` driver solely to enable classical DDS UDP multicast discovery is time-consuming and fragile across different host operating systems. Leveraging a standard **Docker Bridge** network combined with the **Fast-DDS Discovery Server** provides a plug-and-play, deterministic, and highly portable architecture requiring zero host-level network modifications.
+
+---
+
+### 2. Asynchronous Multithreaded Coordinator & Thread Architecture
+
+The Rust swarm coordinator core (`main.rs`) is implemented using an asynchronous, actor-like concurrency pattern. Rather than bringing in heavy external actor frameworks, it leverages native OS threads and thread-safe shared memory primitives.
+
+#### Concurrency Primitives & Standard Library
+The coordinator relies entirely on standard Rust primitives (`std::thread` and `std::sync`):
+- **`std::thread::spawn`**: Creates dedicated, native OS threads to process incoming ROS 2 topic streams concurrently without blocking the main event loop.
+- **`std::sync::Arc` (Atomic Reference Counting)**: Enables thread-safe shared ownership of the central swarm state across all background threads.
+- **`std::sync::Mutex` (Mutual Exclusion)**: Ensures atomic, mutually exclusive access to the shared `SwarmCoordinatorState`, preventing data races and guaranteeing memory safety.
+
+#### Thread Topology & Responsibilities
+The coordinator spawns 5 concurrent threads upon initialization:
+
+| Thread Name | Monitored Resource / ROS 2 Topic | Primary Responsibility |
+| :--- | :--- | :--- |
+| **Main Loop Thread** | `SwarmCoordinatorState` Timer | Executes a 2 Hz heartbeat evaluation loop. Detects missing heartbeats (5s `Suspected`, 10s `Failed`), triggers Gazebo model despawning, manages Leader re-election, and controls automatic re-formation. |
+| **Registration Listener** | ROS 2 Topic `/swarm/register` | Listens for new or repaired drone registration payloads (Event 1 & Event 6 `RepairCompleted`), initializes state entries, and triggers Gazebo model spawning. |
+| **Heartbeat Telemetry Listener** | ROS 2 Topic `/swarm/heartbeat` | Receives 1 Hz heartbeat payloads from active drones, updates timestamps, tracks 3D coordinates $(x,y,z)$, and processes recovery from `Suspected` to `Active` (Event 4). |
+| **Goto Command Listener** | ROS 2 Topic `/swarm/goto` | Monitors navigation target payloads sent across the swarm and updates targeted drone positions in the shared state map. |
+| **Formation Trigger Listener** | ROS 2 Topic `/swarm/formation` | Intercepts formation requests (e.g., `line formation`) and triggers spatial formation calculations around the active Leader. |
+
+#### Thread Communication & Memory Synchronization
+The background threads do not exchange messages via internal channels or mailboxes. Instead, they communicate through **Shared State Mutex Synchronization**:
+
+1. Each topic listener thread remains blocked on a synchronous stream reader (`std::process::Command` running `ros2 topic echo`).
+2. When a JSON payload arrives, the thread parses the data and acquires the lock on `Arc<Mutex<SwarmCoordinatorState>>`.
+3. The thread executes the state transition on the **Kani-verified FSM** (`Kani_verify::transition`).
+4. The thread writes the updated state directly to the shared memory map and immediately drops the `Mutex` lock, allowing other threads to proceed without lock contention.
+
+#### Architectural Justification: `std::thread` + `Arc<Mutex>` vs. Actor Frameworks
+While actor frameworks (e.g., Actix, Bastion, Lunatic) are popular in Rust, using `std::thread::spawn` + `Arc<Mutex>` provides specific engineering advantages for this system:
+
+1. **Zero-Overhead & Minimal Dependency Footprint**:
+   Actor frameworks require async runtimes (such as Tokio), event loops, and channel mailboxes. Standard Rust threads and mutexes eliminate extra runtime overhead, keeping the binary size lightweight and optimal for containerized IIoT deployments.
+2. **Natural Alignment with Synchronous I/O Subprocesses**:
+   ROS 2 topic listeners run CLI commands (`ros2 topic echo`) with synchronous line reading (`BufReader::lines()`). Native OS threads handle blocking I/O cleanly without requiring complex async wrapper streams or futures executor scheduling.
+3. **Preservation of Kani-Verified State Invariants**:
+   The formal verification model (`Kani_verify`) relies on a centralized, deterministic state machine. Shared memory synchronization (`Arc<Mutex>`) ensures state changes are applied atomically and predictably, matching the Kani proof harnesses. In contrast, asynchronous actor mailboxes can reorder messages, risking out-of-order state transitions.
+4. **Manual Actor Pattern Equivalence**:
+   Each thread operates as an isolated, single-responsibility entity listening to its own topic and mutating state via atomic operations. This design is architecturally equivalent to an actor pattern ("Manual Actor Pattern") while avoiding framework overhead.
+
+---
+
+### 3. ROS 2 & Drone Agent Node Architecture (drone_agent_wrapper.py)
+
+#### What is ROS 2?
+**Robot Operating System 2 (ROS 2)** is an open-source, data-centric middleware framework for robotics development. Built on top of the DDS standard, ROS 2 provides standard abstractions for modular robotic nodes, inter-process communication, pub/sub topics, services, actions, and node lifecycle management across distributed multi-robot systems.
+
+#### What is `drone_agent_wrapper.py` & Its Role?
+The file `drone_agent_wrapper.py` is implemented as a Python ROS 2 node (`rclpy.node.Node`). It serves as the onboard intelligence wrapper executing inside each drone agent container:
+
+- **Publishers**:
+  - `/swarm/register`: Emits JSON registration payloads containing spawn coordinates to the Rust coordinator upon launch.
+  - `/swarm/heartbeat`: Publishes 1 Hz status, timestamp, and 3D coordinate telemetry (`x, y, z`) allowing the coordinator to track drone health.
+  - `/{drone_id}/cmd_vel`: Publishes `geometry_msgs/Twist` linear velocity vectors directly to the Gazebo simulation interface.
+- **Subscribers**:
+  - `/swarm/goto` (Broadcast) & `/{drone_id}/goto` (Unicast): Listens for target navigation coordinates issued by the coordinator.
+  - `/{drone_id}/odometry`: Subscribes to real-time ground-truth 3D position feedback from Gazebo.
+  - `/{peer_id}/odometry`: Subscribes to peer drone odometry streams to track neighboring drone positions in real time. By tracking the 3D position of all peer drones, the local agent node calculates repulsive forces via the Artificial Potential Fields (APF) algorithm. If a peer drone approaches too closely (within the 1.2m safety distance), the local drone autonomously alters its trajectory to avoid a 3D mid-air collision.
+- **Control Loop & Flight Safety**:
+  - **P-Controller (20 Hz)**: Computes linear attractive velocity vectors towards assigned target coordinates with position tolerance checks.
+  - **3D Artificial Potential Fields (APF)**: Computes repulsive velocity vectors away from peer drones within a 1.2m safety sphere to guarantee mid-air collision avoidance during multi-agent flight.
+
+#### Scalability, Container Isolation & Dynamic Spawning (`DRONE_NAME`)
+The agent wrapper design enables horizontal scalability across Docker containers:
+
+1. **Containerized Node Instantiation**:
+   Every drone container runs an identical Docker image (`Dockerfile.drone`), but reads `DRONE_NAME` (e.g., `drone_1`, `drone_2`), `SPAWN_X`, `SPAWN_Y`, and `SPAWN_Z` from container environment variables upon launch.
+
+2. **Integration with Coordinator Dynamic Model Spawning (`main.rs:805-859`)**:
+   - When a drone registers, the Rust coordinator function `spawn_drone_in_gazebo` reads the SDF model template (`/app/models/x3_uav/model.sdf`), replaces `__ROBOT_NAMESPACE__` with `/model/{drone_id}`, and writes a dedicated per-drone model file (`/app/spawned/{drone_id}_model.sdf`).
+   - The coordinator then invokes `ros2 run ros_gz_sim create -name {drone_id} -file /app/spawned/{drone_id}_model.sdf` to dynamically spawn the drone in Gazebo.
+   - This dynamic namespace injection isolates ROS 2 topics (`/{drone_id}/cmd_vel`, `/{drone_id}/odometry`), allowing the swarm to scale horizontally without topic collisions via `docker compose up --scale drone=N`.
