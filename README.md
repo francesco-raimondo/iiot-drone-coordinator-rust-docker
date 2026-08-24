@@ -337,12 +337,11 @@ http://localhost:8000
 #### A. Triggering Line Formation
 
 1. Open the Web Dashboard (`http://localhost:8000`). You will see the total drone count (e.g., 3 drones: `drone_1`, `drone_2`, `drone_3`), individual status cards, and the **Active Leader** indicator (e.g., `Leader: drone_1`).
-   ![Web Observability Dashboard UI](docs/images/Dashboard.png)
 2. In the **Swarm Manager** panel, click **"Create Line Formation"**.
 3. **Observed Behavior**:
-   - The Rust coordinator assigns target coordinates (X, Y, Z=4.0m) to the Leader and symmetric 2.0m-spaced targets along the Y-axis to Follower drones.
+   - The Rust coordinator assigns target coordinates to the Leader and symmetric 2.0m-spaced targets along the Y-axis to Follower drones.
    - In the Gazebo 3D window, drones take off from the ground and align into a line formation centered around the Leader.
-
+   ![Line Formation](docs/images/Dashboard.png)
 ---
 
 #### B. Simulating Drone Failure (Pause Container)
