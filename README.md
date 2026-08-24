@@ -115,6 +115,9 @@ Every drone in the swarm is represented by a dual-state tuple `(S1, S2)` maintai
   - `Active`: Operational drone emitting periodic heartbeats.
   - `Suspected`: No heartbeat received for over **5 seconds**.
   - `Failed`: No heartbeat received for over **10 seconds** (drone considered crashed/offline).
+
+![FSM 1 - Health State Diagram](docs/images/FSM_Health.png)
+
 - **FSM 2 (Swarm Role - S2)**:
   - `None`: No role assigned (when S1 is `Unregistered` or `Failed`).
   - `Candidate`: Eligible to become Leader during an election process.
