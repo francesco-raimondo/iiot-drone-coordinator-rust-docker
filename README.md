@@ -199,28 +199,7 @@ The Fast-DDS Discovery Server converts ROS 2 discovery into a two-phase process:
 
 ##### Sequence Diagram: Discovery Phase vs. Post-Discovery P2P Communication
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant D1 as Drone Agent (Publisher)
-    participant DS as Fast-DDS Discovery Server (172.28.0.10:11811)
-    participant RC as Rust Coordinator (Subscriber)
-
-    note over D1,RC: Phase 1: Unicast Discovery & Endpoint Matching (Server-Mediated)
-    D1->>DS: 1. PDP Unicast Announcement (IP: 172.28.0.x, GUID)
-    RC->>DS: 2. PDP Unicast Announcement (IP: 172.28.0.30, GUID)
-    D1->>DS: 3. EDP Publication: Topic '/swarm/heartbeat' (DataWriter Endpoint)
-    RC->>DS: 4. EDP Subscription: Topic '/swarm/heartbeat' (DataReader Endpoint)
-    DS-->>D1: 5. Peer Endpoint Notification (Coordinator IP: 172.28.0.30, QoS)
-    DS-->>RC: 6. Peer Endpoint Notification (Drone Agent IP: 172.28.0.x, QoS)
-
-    note over D1,RC: Phase 2: Direct Peer-to-Peer RTPS Communication (Post-Discovery)
-    rect rgb(235, 245, 255)
-        D1->>RC: 7. Direct RTPS Unicast Message: Heartbeat Payload (1 Hz)
-        D1->>RC: 8. Direct RTPS Unicast Message: Heartbeat Payload (1 Hz)
-        note over DS: Discovery Server is NOT involved in data payload transport!
-    end
-```
+![Sequence Diagram - Discovery Phase vs. Post-Discovery P2P Communication](docs/images/Sequence_FastDDS.png)
 
 #### Architectural Decision: Docker Bridge + Discovery Server vs. Macvlan
 When deploying containerized ROS 2 swarms, selecting the network driver involves critical trade-offs:
