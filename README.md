@@ -117,7 +117,7 @@ Every drone in the swarm is represented by a dual-state tuple `(S1, S2)` maintai
   - `Failed`: No heartbeat received for over **10 seconds** (drone considered crashed/offline).
 
 ![FSM 1 - Health State Diagram](docs/images/FSM_Health.png)
-
+<br>
 - **FSM 2 (Swarm Role - S2)**:
   - `None`: No role assigned (when S1 is `Unregistered` or `Failed`).
   - `Candidate`: Eligible to become Leader during an election process.
@@ -125,7 +125,7 @@ Every drone in the swarm is represented by a dual-state tuple `(S1, S2)` maintai
   - `Leader`: Active leader drone governing the swarm.
 
 ![FSM 2 - Swarm Role Diagram](docs/images/FSM_Roles.png)
-
+<br>
 - **Complete Dual-FSM Composition**: The overall state of each drone agent is determined by combining both state machines into a unified dual-state tuple `(S1, S2)` (Health State, Role). The complete state transition model illustrating all valid state pairs and transition events is shown below:
 
 ![Complete Combined Dual-FSM Model Diagram](docs/images/FSM_complete.png)
