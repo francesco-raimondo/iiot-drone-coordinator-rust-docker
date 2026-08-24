@@ -124,6 +124,12 @@ Every drone in the swarm is represented by a dual-state tuple `(S1, S2)` maintai
   - `Follower`: Gregarious drone following the Leader's trajectory and formation directives.
   - `Leader`: Active leader drone governing the swarm.
 
+![FSM 2 - Swarm Role Diagram](docs/images/FSM_Roles.png)
+
+- **Complete Dual-FSM Composition**: The overall state of each drone agent is determined by combining both state machines into a unified dual-state tuple `(S1, S2)` (Health State, Role). The complete state transition model illustrating all valid state pairs and transition events is shown below:
+
+![Complete Combined Dual-FSM Model Diagram](docs/images/FSM_complete.png)
+
 ### Formal Verification with Kani
 
 Located in the `Kani_verify/` directory, proof harnesses written for the **Kani** model checker mathematically verify the following safety invariants:
