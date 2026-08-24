@@ -221,5 +221,3 @@ xhost -local:root
 ```
 
 ---
-
-*Developed for Industrial IoT & Autonomous Systems Architecture.*
