@@ -115,12 +115,12 @@ fn main() {
             for (id, drone) in guard.drones.iter_mut() {
                 // Event 5: Timeout > 10s from Suspected -> Failed
                 if drone.state.s1 == Fsm1State::Suspected && drone.last_heartbeat.elapsed() > Duration::from_secs(10) {
-                    drone.state = transition(drone.state, SwarmEvent::DroneFailed);
+                    drone.state = transition(drone.state, SwarmEvent::HeartbeatTimeout { elapsed_seconds: 10 });
                     failed_drones.push((id.clone(), drone.state));
                 }
                 // Event 3: Timeout > 5s from Active -> Suspected
                 else if drone.state.s1 == Fsm1State::Active && drone.last_heartbeat.elapsed() > Duration::from_secs(5) {
-                    drone.state = transition(drone.state, SwarmEvent::HeartbeatTimeout5s);
+                    drone.state = transition(drone.state, SwarmEvent::HeartbeatTimeout { elapsed_seconds: 5 });
                     suspected_drones.push((id.clone(), drone.state));
                 }
             }
@@ -334,9 +334,9 @@ fn listen_heartbeats(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
                         if let Some(y) = payload.y { drone.y = y; }
                         if let Some(z) = payload.z { drone.z = z; }
 
-                        // If drone was Suspected, apply Event 4 (HeartbeatRecovered10s)
+                        // If drone was Suspected, apply Event 4 (HeartbeatRecovered)
                         if drone.state.s1 == Fsm1State::Suspected {
-                            drone.state = transition(drone.state, SwarmEvent::HeartbeatRecovered10s);
+                            drone.state = transition(drone.state, SwarmEvent::HeartbeatRecovered);
                             println!(
                                 "[coordinator] INFO: Heartbeat recovered for {}! Event 4 applied -> New state: ({:?}, {:?})",
                                 payload.drone_id, drone.state.s1, drone.state.s2
