@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import urllib.request
 from typing import Any, Dict, List, Optional
 import docker
 from fastapi import FastAPI, HTTPException
@@ -24,42 +26,31 @@ def get_docker_client() -> docker.DockerClient:
         )
 
 
-def parse_coordinator_status_log(log_text: str) -> Dict[str, Any]:
-    """Parse the latest status line from the coordinator container log output.
+COORDINATOR_HTTP_URL = os.environ.get("COORDINATOR_HTTP_URL", "http://coordinator:8080/status")
 
-    Sample log line:
-    [coordinator] Swarm status: 3 drone(s) | Leader: Some("drone_1") | States: [drone_1: (Active, Leader), drone_2: (Active, Follower)]
-    """
-    latest_status_line = None
-    for line in log_text.splitlines():
-        if "[coordinator] Swarm status:" in line:
-            latest_status_line = line
 
-    if not latest_status_line:
-        return {"leader_id": None, "drones": {}}
+def fetch_coordinator_status_http() -> Dict[str, Any]:
+    """Query current swarm status directly from Rust coordinator HTTP REST API."""
+    try:
+        req = urllib.request.Request(COORDINATOR_HTTP_URL, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            if response.status == 200:
+                body = response.read().decode("utf-8")
+                return json.loads(body)
+    except Exception as err:
+        # Fallback to localhost if running outside Docker network
+        try:
+            fallback_url = "http://localhost:8080/status"
+            req = urllib.request.Request(fallback_url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=1.0) as response:
+                if response.status == 200:
+                    body = response.read().decode("utf-8")
+                    return json.loads(body)
+        except Exception:
+            pass
+        print(f"[server] Warning: Could not reach coordinator REST API: {err}")
 
-    # Extract leader ID
-    leader_match = re.search(r'Leader:\s*(?:Some\("([^"]+)"\)|None)', latest_status_line)
-    leader_id = leader_match.group(1) if leader_match and leader_match.group(1) else None
-
-    # Extract drone states list: [drone_1: (Active, Leader), drone_2: (Active, Follower)]
-    drones_map = {}
-    states_section_match = re.search(r"States:\s*\[(.*?)\]", latest_status_line)
-    if states_section_match:
-        states_str = states_section_match.group(1)
-        # Match pattern drone_id: (State1, State2)
-        pattern = r'([a-zA-Z0-9_\-]+):\s*\(([^,]+),\s*([^)]+)\)'
-        for match in re.finditer(pattern, states_str):
-            drone_id = match.group(1).strip()
-            fsm_s1 = match.group(2).strip()
-            fsm_s2 = match.group(3).strip()
-            drones_map[drone_id] = {
-                "drone_id": drone_id,
-                "fsm_s1": fsm_s1,
-                "fsm_s2": fsm_s2,
-            }
-
-    return {"leader_id": leader_id, "drones": drones_map}
+    return {"leader_id": None, "drones": {}}
 
 
 @app.get("/")
@@ -79,24 +70,11 @@ def read_home():
 
 @app.get("/api/swarm/status")
 def get_swarm_status():
-    """Fetch current swarm status by inspecting Docker containers and coordinator logs."""
+    """Fetch current swarm status by querying coordinator REST API and inspecting Docker containers."""
     client = get_docker_client()
+    coordinator_status = fetch_coordinator_status_http()
 
-    # Find coordinator container
-    coordinator_container = None
     all_containers = client.containers.list(all=True)
-    for container in all_containers:
-        if "coordinator" in container.name:
-            coordinator_container = container
-            break
-
-    log_status = {"leader_id": None, "drones": {}}
-    if coordinator_container:
-        try:
-            logs = coordinator_container.logs(tail=100).decode("utf-8", errors="ignore")
-            log_status = parse_coordinator_status_log(logs)
-        except Exception as log_err:
-            print(f"[server] Warning: Could not read coordinator logs: {log_err}")
 
     # Discover drone containers
     drone_containers = [
@@ -118,12 +96,12 @@ def get_swarm_status():
 
         found_drone_ids.add(drone_id)
 
-        # Get FSM status if reported by coordinator
-        fsm_info = log_status["drones"].get(drone_id, {})
+        # Get FSM status if reported by coordinator REST API
+        fsm_info = coordinator_status.get("drones", {}).get(drone_id, {})
         fsm_s1 = fsm_info.get("fsm_s1", "Active" if container.status == "running" else "Unknown")
         fsm_s2 = fsm_info.get("fsm_s2", "Follower")
 
-        if log_status["leader_id"] and log_status["leader_id"] == drone_id:
+        if coordinator_status.get("leader_id") and coordinator_status["leader_id"] == drone_id:
             fsm_s2 = "Leader"
 
         is_paused = container.status == "paused"
@@ -137,7 +115,7 @@ def get_swarm_status():
             "fsm_s1": fsm_s1,
             "fsm_s2": fsm_s2,
             "is_paused": is_paused,
-            "is_leader": log_status["leader_id"] == drone_id,
+            "is_leader": coordinator_status.get("leader_id") == drone_id,
         })
 
     # Sort drones by drone_id for stable UI ordering
@@ -145,9 +123,10 @@ def get_swarm_status():
 
     return {
         "total_drones": len(drone_list),
-        "leader_id": log_status.get("leader_id"),
+        "leader_id": coordinator_status.get("leader_id"),
         "drones": drone_list,
     }
+
 
 
 @app.post("/api/drone/{drone_id}/pause")

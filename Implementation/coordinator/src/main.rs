@@ -39,6 +39,22 @@ struct SwarmFormationPayload {
     formation: String,
 }
 
+#[derive(Debug, Serialize)]
+struct DroneStatusDto {
+    drone_id: String,
+    fsm_s1: String,
+    fsm_s2: String,
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct SwarmStatusDto {
+    leader_id: Option<String>,
+    drones: HashMap<String, DroneStatusDto>,
+}
+
 #[derive(Debug, Clone)]
 struct ManagedDrone {
     drone_id: String,
@@ -100,6 +116,12 @@ fn main() {
     let swarm_state_form = Arc::clone(&swarm_state);
     thread::spawn(move || {
         listen_swarm_formation(swarm_state_form);
+    });
+
+    // Spawn HTTP status REST server on port 8080
+    let swarm_state_http = Arc::clone(&swarm_state);
+    thread::spawn(move || {
+        spawn_status_http_server(swarm_state_http);
     });
 
     println!("[coordinator] Coordinator running and listening on ROS 2 topics /swarm/register, /swarm/heartbeat, /swarm/goto & /swarm/formation...");
@@ -927,5 +949,48 @@ fn despawn_drone_from_gazebo(drone_id: &str) {
                 drone_id, e
             );
         }
+    }
+}
+
+fn spawn_status_http_server(swarm_state: Arc<Mutex<SwarmCoordinatorState>>) {
+    let server = match tiny_http::Server::http("0.0.0.0:8080") {
+        Ok(s) => s,
+        Err(e) => {
+            println!("[coordinator] ERROR starting HTTP status server on port 8080: {}", e);
+            return;
+        }
+    };
+    println!("[coordinator] HTTP Status REST API listening on http://0.0.0.0:8080/status");
+
+    for request in server.incoming_requests() {
+        let (leader_id, drones_map) = if let Ok(guard) = swarm_state.lock() {
+            let mut drones_dto = HashMap::new();
+            for (id, drone) in guard.drones.iter() {
+                drones_dto.insert(
+                    id.clone(),
+                    DroneStatusDto {
+                        drone_id: id.clone(),
+                        fsm_s1: format!("{:?}", drone.state.s1),
+                        fsm_s2: format!("{:?}", drone.state.s2),
+                        x: drone.x,
+                        y: drone.y,
+                        z: drone.z,
+                    },
+                );
+            }
+            (guard.current_leader_id.clone(), drones_dto)
+        } else {
+            (None, HashMap::new())
+        };
+
+        let response_dto = SwarmStatusDto {
+            leader_id,
+            drones: drones_map,
+        };
+
+        let json_body = serde_json::to_string(&response_dto).unwrap_or_else(|_| "{}".to_string());
+        let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+        let response = tiny_http::Response::from_string(json_body).with_header(header);
+        let _ = request.respond(response);
     }
 }

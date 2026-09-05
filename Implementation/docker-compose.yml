@@ -76,6 +76,8 @@ services:
     volumes:
       - ./models:/app/models:ro
       - spawned_models:/app/spawned
+    ports:
+      - "8080:8080"
     networks:
       swarm_net:
         ipv4_address: 172.28.0.30
